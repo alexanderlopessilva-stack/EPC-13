@@ -21,6 +21,8 @@ export default function ItemModal({ item, onClose, onSave, onDelete, todosItens 
   const [partialState, setPartialState] = useState({});
   const [finDia, setFinDia] = useState(null);
   const [copySrcId, setCopySrcId] = useState('');
+  const [buscaTag, setBuscaTag] = useState('');
+  const [histNavIdx, setHistNavIdx] = useState(0);
 
   useEffect(() => { setDados(item); }, [item]);
   useEffect(() => {
@@ -58,6 +60,35 @@ export default function ItemModal({ item, onClose, onSave, onDelete, todosItens 
     return na.startsWith(nb) || nb.startsWith(na);
   }
   function tagEhRepetida(t) { return historicoTags.some(h => tagsSaoEquivalentes(h.tag, t)); }
+
+  // semanas (ordenadas) em que este Draft já apareceu antes
+  const semanasHistorico = (() => {
+    const s = [];
+    historicoTags.forEach(h => { if (!s.includes(h.semana)) s.push(h.semana); });
+    return s.sort((a, b) => parseInt(a) - parseInt(b));
+  })();
+
+  function tagsDaSemanaHist(numeroSemana) {
+    const lista = [];
+    historicoTags.forEach(h => {
+      if (h.semana === numeroSemana && !lista.includes(h.tag)) lista.push(h.tag);
+    });
+    return lista;
+  }
+
+  async function exportarTagSituacao() {
+    const XLSX = await import('xlsx');
+    const tags = (dados.tags || []).filter(t => t.trim());
+    if (!tags.length) { alert('Este item não tem nenhuma TAG cadastrada.'); return; }
+    const sits = dados.tags_situacoes || {};
+    // formato compatível com "Atualizar Situações das TAGs": TAG na coluna A, Situação na coluna F
+    const linhas = [['TAG', '', '', '', '', 'Situação']];
+    tags.forEach(t => linhas.push([t, '', '', '', '', sits[t.trim().toLowerCase()] || '']));
+    const ws = XLSX.utils.aoa_to_sheet(linhas);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'TAGs');
+    XLSX.writeFile(wb, 'tag_situacao_item' + (dados.item || '') + '.xlsx');
+  }
 
   function campo(chave, valor) { setDados(prev => ({ ...prev, [chave]: valor })); }
 
@@ -227,36 +258,87 @@ export default function ItemModal({ item, onClose, onSave, onDelete, todosItens 
 
           {aba === 'tags' && (
             <div>
-              <div style={{ fontSize: 11, color: '#666', marginBottom: 10 }}>
-                🟢 verde = nova (não apareceu antes neste Draft) · 🔴 vermelho = repetida (já apareceu em outra semana)
-              </div>
-              <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
+              <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+                <input value={buscaTag} onChange={e => setBuscaTag(e.target.value)}
+                  placeholder="Buscar TAG..." style={{ ...inputEstilo, flex: 1, minWidth: 140 }} />
                 <input value={novaTag} onChange={e => setNovaTag(e.target.value)}
                   onKeyDown={e => { if (e.key === 'Enter') adicionarTag(); }}
-                  placeholder="Nova TAG..." style={inputEstilo} />
-                <button onClick={adicionarTag} style={btnEstilo('#007a33')}>+ Adicionar</button>
+                  placeholder="Nova TAG..." style={{ ...inputEstilo, width: 160 }} />
+                <button onClick={adicionarTag} style={btnEstilo('#007a33')}>+ Nova TAG</button>
+                <button onClick={exportarTagSituacao} style={btnEstilo('#6a1b9a')}>📤 Exportar TAG × Situação</button>
               </div>
+
+              {historicoTags.length > 0 && (
+                <div style={{ background: '#fff8e1', border: '1px solid #ffe0a0', borderRadius: 8, padding: '8px 12px', marginBottom: 12, fontSize: 12, color: '#8a4b00', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                  🔁 Este Draft já foi solicitado antes.
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                    <span style={flagEstilo('#e53935')}>🔁 JÁ PEDIDA</span> = já apareceu antes
+                  </span>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                    <span style={flagEstilo('#2e9e44')}>🆕 NOVA</span> = não está no histórico
+                  </span>
+                </div>
+              )}
+
               {(dados.tags || []).length === 0 && <div style={{ color: '#999', fontSize: 13 }}>Nenhuma TAG cadastrada.</div>}
-              {(dados.tags || []).map(t => {
+              {(dados.tags || []).filter(t => !buscaTag || t.toLowerCase().includes(buscaTag.toLowerCase())).map(t => {
                 const repetida = tagEhRepetida(t);
+                const temHist = historicoTags.length > 0;
                 return (
-                  <div key={t} style={{ background: repetida ? '#fdeaea' : '#e8f7ea', border: '1.5px solid ' + (repetida ? '#e53935' : '#2e9e44'), borderRadius: 8, padding: 10, marginBottom: 8 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                      <span>
-                        <b style={{ fontSize: 13 }}>{t}</b>
-                        {repetida
-                          ? <span style={{ color: '#e53935', fontSize: 11, marginLeft: 8, fontWeight: 'bold' }}>
-                              🔴 repetida ✔ — já pedida na(s) semana(s): {semanasOndeTagApareceu(t).join(', ')}
-                            </span>
-                          : <span style={{ color: '#2e9e44', fontSize: 11, marginLeft: 8, fontWeight: 'bold' }}>🟢 nova</span>}
-                      </span>
-                      <span onClick={() => removerTag(t)} style={{ cursor: 'pointer', color: '#c0392b', fontSize: 13 }}>🗑</span>
-                    </div>
-                    <input placeholder="Situação desta TAG..." value={(dados.tags_situacoes || {})[t.trim().toLowerCase()] || ''}
-                      onChange={e => situacaoTag(t, e.target.value)} style={{ ...inputEstilo, width: '100%' }} />
+                  <div key={t} style={{
+                    background: temHist ? (repetida ? '#fdeaea' : '#e8f7ea') : '#fafafa',
+                    borderLeft: '5px solid ' + (temHist ? (repetida ? '#e53935' : '#2e9e44') : '#ddd'),
+                    borderRadius: 6, padding: '8px 10px', marginBottom: 8,
+                    display: 'flex', gap: 10, alignItems: 'flex-start', flexWrap: 'wrap',
+                  }}>
+                    <input readOnly value={t} style={{ ...inputEstilo, flex: '0 1 260px', background: '#fff' }} />
+                    {temHist && (repetida
+                      ? <span style={flagEstilo('#e53935')} title={'Já pedida na(s) semana(s): ' + semanasOndeTagApareceu(t).join(', ')}>🔁 JÁ PEDIDA</span>
+                      : <span style={flagEstilo('#2e9e44')}>🆕 NOVA</span>)}
+                    <textarea placeholder="💬 Situação desta TAG (opcional)..."
+                      value={(dados.tags_situacoes || {})[t.trim().toLowerCase()] || ''}
+                      onChange={e => situacaoTag(t, e.target.value)}
+                      rows={2} style={{ ...inputEstilo, flex: '1 1 240px', resize: 'vertical', minWidth: 180 }} />
+                    <button onClick={() => removerTag(t)} style={{ ...btnEstilo('#fdecea', '#c0392b'), padding: '6px 10px' }}>✕</button>
                   </div>
                 );
               })}
+
+              {semanasHistorico.length > 0 && (
+                <div style={{ marginTop: 16, border: '1px solid #cfe3d0', borderRadius: 12, padding: '12px 14px', background: '#f7fbf7' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12, marginBottom: 10 }}>
+                    <button disabled={semanasHistorico.length < 2}
+                      onClick={() => setHistNavIdx(i => (i - 1 + semanasHistorico.length) % semanasHistorico.length)}
+                      style={{ ...btnEstilo('#e8f5e9', '#007a33'), opacity: semanasHistorico.length < 2 ? .3 : 1 }}>◀</button>
+                    <span style={{ fontSize: 12, fontWeight: 'bold', color: '#007a33' }}>
+                      📚 TAGs anteriores — Sem. {semanasHistorico[histNavIdx]} · {histNavIdx + 1}/{semanasHistorico.length}
+                    </span>
+                    <button disabled={semanasHistorico.length < 2}
+                      onClick={() => setHistNavIdx(i => (i + 1) % semanasHistorico.length)}
+                      style={{ ...btnEstilo('#e8f5e9', '#007a33'), opacity: semanasHistorico.length < 2 ? .3 : 1 }}>▶</button>
+                  </div>
+                  <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                    <tbody>
+                      {tagsDaSemanaHist(semanasHistorico[histNavIdx]).map((t, i) => {
+                        const aindaNaAtual = (dados.tags || []).some(ct => tagsSaoEquivalentes(ct, t));
+                        return (
+                          <tr key={i} style={{
+                            background: aindaNaAtual ? '#fdeaea' : '#e8f7ea',
+                            borderLeft: '4px solid ' + (aindaNaAtual ? '#e53935' : '#2e9e44'),
+                            borderBottom: '1px solid #e3efe4',
+                          }}>
+                            <td style={{ width: 28, textAlign: 'center', padding: '7px 8px', fontSize: 13 }}>{aindaNaAtual ? '✔' : '🆕'}</td>
+                            <td style={{ padding: '7px 8px', fontSize: 13, color: '#333' }}>{t}</td>
+                          </tr>
+                        );
+                      })}
+                      {tagsDaSemanaHist(semanasHistorico[histNavIdx]).length === 0 && (
+                        <tr><td colSpan={2} style={{ padding: 12, textAlign: 'center', color: '#aaa', fontStyle: 'italic' }}>sem TAGs</td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           )}
 
@@ -491,7 +573,7 @@ function Campo({ label, value, onChange, full }) {
 }
 
 const overlayEstilo = { position: 'fixed', inset: 0, background: 'rgba(0,20,5,.6)', zIndex: 500, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 };
-const modalEstilo = { background: '#fff', width: 660, maxWidth: '96vw', maxHeight: '90vh', borderRadius: 14, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative', boxShadow: '0 8px 40px rgba(0,0,0,.35)' };
+const modalEstilo = { background: '#fff', width: 860, maxWidth: '96vw', maxHeight: '92vh', borderRadius: 14, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative', boxShadow: '0 8px 40px rgba(0,0,0,.35)' };
 const closeXEstilo = { position: 'absolute', top: 10, right: 12, background: 'rgba(0,0,0,.2)', border: 'none', borderRadius: '50%', width: 30, height: 30, color: '#fff', fontWeight: 'bold', cursor: 'pointer', zIndex: 5 };
 const labelEstilo = { display: 'block', fontSize: 11, fontWeight: 'bold', color: '#666', marginBottom: 4, textTransform: 'uppercase' };
 const inputEstilo = { padding: '8px 10px', borderRadius: 7, border: '1px solid #ccc', fontSize: 13, fontFamily: 'Arial' };
@@ -500,6 +582,10 @@ function btnEstilo(cor, texto) {
 }
 const secaoEstilo = { background: '#fafcfa', border: '1px solid #e0eae0', borderRadius: 10, padding: 14, marginBottom: 14 };
 const secaoLabelEstilo = { fontSize: 12, fontWeight: 'bold', color: '#007a33', marginBottom: 10, textTransform: 'uppercase', letterSpacing: .3 };
+function flagEstilo(cor) {
+  return { display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 'bold',
+    padding: '3px 10px', borderRadius: 12, whiteSpace: 'nowrap', background: cor, color: '#fff' };
+}
 function pickerEstilo(cor) {
   return { background: '#f7fbf7', border: '2px solid ' + cor, borderRadius: 12, padding: 14, marginBottom: 16 };
 }
