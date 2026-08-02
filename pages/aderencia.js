@@ -102,20 +102,38 @@ export default function Aderencia() {
     try { data = JSON.parse(texto); } catch (err) { alert('Arquivo JSON inválido: ' + err.message); e.target.value = ''; return; }
     if (!data.historico) { alert('Esse arquivo não parece ser uma sessão de Aderência válida (não encontrei "historico").'); e.target.value = ''; return; }
 
-    const numerosExistentes = new Set(semanas.map(s => s.numero));
-    let totalSemanasCriadas = 0, totalItensCriados = 0;
+    let totalSemanasCriadas = 0, totalSemanasAtualizadas = 0, totalItensCriados = 0;
     const semanasPuladas = [];
 
     for (const [numero, semanaObj] of Object.entries(data.historico)) {
-      if (numerosExistentes.has(numero)) { semanasPuladas.push(numero); continue; }
+      const semanaExistente = semanas.find(s => s.numero === numero);
+      let semanaId;
 
-      const { data: novaSemana, error: errSemana } = await supabase.from('semanas').insert({
-        numero,
-        periodo_inicio: semanaObj.periodoInicio || null,
-        periodo_fim: semanaObj.periodoFim || null,
-      }).select().single();
-      if (errSemana) { alert('Erro ao criar semana ' + numero + ': ' + errSemana.message); continue; }
-      totalSemanasCriadas++;
+      if (semanaExistente) {
+        const substituir = confirm(
+          'A semana ' + numero + ' já existe no site.\n\n' +
+          'Deseja SUBSTITUIR os itens dela pelos dados desse arquivo?\n' +
+          '(os itens atuais dessa semana serão apagados e recriados com o que está no arquivo — TAGs, status, tudo)'
+        );
+        if (!substituir) { semanasPuladas.push(numero); continue; }
+        semanaId = semanaExistente.id;
+        const { error: errDel } = await supabase.from('itens').delete().eq('semana_id', semanaId);
+        if (errDel) { alert('Erro ao limpar itens antigos da semana ' + numero + ': ' + errDel.message); continue; }
+        await supabase.from('semanas').update({
+          periodo_inicio: semanaObj.periodoInicio || null,
+          periodo_fim: semanaObj.periodoFim || null,
+        }).eq('id', semanaId);
+        totalSemanasAtualizadas++;
+      } else {
+        const { data: novaSemana, error: errSemana } = await supabase.from('semanas').insert({
+          numero,
+          periodo_inicio: semanaObj.periodoInicio || null,
+          periodo_fim: semanaObj.periodoFim || null,
+        }).select().single();
+        if (errSemana) { alert('Erro ao criar semana ' + numero + ': ' + errSemana.message); continue; }
+        semanaId = novaSemana.id;
+        totalSemanasCriadas++;
+      }
 
       const linhas = (semanaObj.records || []).map(rec => {
         const raw = rec.raw || [];
@@ -124,7 +142,7 @@ export default function Aderencia() {
           devExec = rec.devolutiva.executavel === true ? 'sim' : rec.devolutiva.executavel === false ? 'nao' : rec.devolutiva.executavel;
         }
         return {
-          semana_id: novaSemana.id,
+          semana_id: semanaId,
           item: raw[0] || '', assunto: raw[1] || '', unidade: raw[2] || '', area: raw[3] || '',
           draft: raw[5] || '', pt: raw[6] || '', atividade: raw[7] || '',
           disciplina: raw[12] || '', responsavel: raw[13] || '',
@@ -153,8 +171,10 @@ export default function Aderencia() {
 
     await carregarSemanas();
     setMenuAberto(false);
-    alert('✅ Importação concluída!\n\n' + totalSemanasCriadas + ' semana(s) criada(s)\n' + totalItensCriados + ' item(ns) importado(s)'
-      + (semanasPuladas.length ? '\n\n⚠️ Semana(s) já existente(s) no banco, puladas pra evitar duplicar: ' + semanasPuladas.join(', ') : ''));
+    alert('✅ Importação concluída!\n\n' + totalSemanasCriadas + ' semana(s) nova(s) criada(s)\n'
+      + totalSemanasAtualizadas + ' semana(s) existente(s) substituída(s)\n'
+      + totalItensCriados + ' item(ns) importado(s) no total'
+      + (semanasPuladas.length ? '\n\n⚠️ Semana(s) que você optou por não substituir: ' + semanasPuladas.join(', ') : ''));
     e.target.value = '';
   }
 
