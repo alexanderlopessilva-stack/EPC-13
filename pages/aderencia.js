@@ -727,7 +727,7 @@ export default function Aderencia() {
       )}
 
       {itemAberto && (
-        <ItemModal item={itemAberto} onClose={() => setItemAberto(null)} onSave={salvarItem} onDelete={excluirItem} todosItens={itens} />
+        <ItemModal item={itemAberto} onClose={() => setItemAberto(null)} onSave={salvarItem} onDelete={excluirItem} todosItens={itens} semanaAtualNumero={semanaAtiva ? semanaAtiva.numero : ''} />
       )}
 
       <button onClick={() => setPtAberto(true)} style={{

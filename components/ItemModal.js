@@ -11,7 +11,7 @@ const STATUS_INFO = {
   semprog:  { label: '○',  cor: '#bbb',    texto: '#fff', nome: 'Sem programação' },
 };
 
-export default function ItemModal({ item, onClose, onSave, onDelete, todosItens }) {
+export default function ItemModal({ item, onClose, onSave, onDelete, todosItens, semanaAtualNumero }) {
   const [aba, setAba] = useState('dados');
   const [dados, setDados] = useState(item);
   const [novaTag, setNovaTag] = useState('');
@@ -74,6 +74,101 @@ export default function ItemModal({ item, onClose, onSave, onDelete, todosItens 
       if (h.semana === numeroSemana && !lista.includes(h.tag)) lista.push(h.tag);
     });
     return lista;
+  }
+
+  // Exporta as TAGs deste Draft nesta semana — uma TAG por linha, com classificação e semanas anteriores
+  async function exportarTagsDestaSemana() {
+    const XLSX = await import('xlsx');
+    const tags = (dados.tags || []).filter(t => t.trim());
+    if (!tags.length) { alert('Este item não tem nenhuma TAG cadastrada.'); return; }
+    const sits = dados.tags_situacoes || {};
+    const temHist = historicoTags.length > 0;
+    const headers = ['TAG', 'Classificação', 'Já pedida na(s) semana(s)', 'Situação'];
+    const data = [];
+    data.push(['TAGs — DRAFT ' + (dados.draft || '(sem draft)') + ' — SEMANA ' + (semanaAtualNumero || '?') + ' — ITEM ' + (dados.item || '-')]);
+    data.push(['Exportado em: ' + new Date().toLocaleString('pt-BR')]);
+    data.push([]);
+    data.push(headers);
+    tags.forEach(t => {
+      let classif = '—', semanasAnteriores = '';
+      if (temHist) {
+        const jaPedida = tagEhRepetida(t);
+        classif = jaPedida ? '🔁 Repetida' : '🆕 Nova';
+        if (jaPedida) semanasAnteriores = semanasOndeTagApareceu(t).map(s => 'Sem. ' + s).join(', ');
+      }
+      data.push([t, classif, semanasAnteriores, sits[t.trim().toLowerCase()] || '']);
+    });
+    const ws = XLSX.utils.aoa_to_sheet(data);
+    const lastCol = headers.length - 1;
+    ws['!merges'] = [
+      { s: { r: 0, c: 0 }, e: { r: 0, c: lastCol } },
+      { s: { r: 1, c: 0 }, e: { r: 1, c: lastCol } },
+    ];
+    ws['!cols'] = [{ wch: 32 }, { wch: 16 }, { wch: 26 }, { wch: 50 }];
+    ws['!autofilter'] = { ref: XLSX.utils.encode_range({ s: { r: 3, c: 0 }, e: { r: 3, c: lastCol } }) };
+    const wb = XLSX.utils.book_new();
+    const nomeAba = sanitizarNome('Draft_' + String(dados.draft || 'item')).slice(0, 31);
+    XLSX.utils.book_append_sheet(wb, ws, nomeAba);
+    XLSX.writeFile(wb, 'epc13_tags_draft_' + sanitizarNome(String(dados.draft || 'item')) + '_semana_' + (semanaAtualNumero || '') + '.xlsx');
+  }
+
+  // Exporta o histórico completo do Draft: uma TAG por linha, uma coluna por semana
+  async function exportarMatrizTagsDraft() {
+    const XLSX = await import('xlsx');
+    if (!dados.draft || !String(dados.draft).trim()) { alert('Este item não tem um código de Draft preenchido — não há histórico pra montar.'); return; }
+    const { data: ocorrencias } = await supabase
+      .from('itens')
+      .select('tags, tags_situacoes, semanas(numero)')
+      .eq('draft', dados.draft);
+    if (!ocorrencias || !ocorrencias.length) { alert('Nenhum histórico encontrado para o Draft "' + dados.draft + '".'); return; }
+
+    const registros = ocorrencias.map(o => ({
+      semana: o.semanas ? o.semanas.numero : '?',
+      tags: o.tags || [],
+      sits: o.tags_situacoes || {},
+    })).sort((a, b) => parseInt(a.semana) - parseInt(b.semana));
+
+    const semanasList = [];
+    registros.forEach(o => { if (!semanasList.includes(o.semana)) semanasList.push(o.semana); });
+
+    const tagsMap = {}, ordemTags = [];
+    registros.forEach(o => {
+      o.tags.filter(t => t.trim()).forEach(t => {
+        const key = t.trim().toLowerCase();
+        if (!tagsMap[key]) { tagsMap[key] = { label: t, cells: {} }; ordemTags.push(key); }
+        const sit = o.sits[key];
+        tagsMap[key].cells[o.semana] = (sit && sit.trim()) ? sit.trim() : '✔';
+      });
+    });
+
+    const headers = ['TAG'].concat(semanasList.map(s => 'Semana ' + s));
+    const data = [];
+    data.push(['HISTÓRICO DE TAGs — DRAFT ' + dados.draft]);
+    data.push(['Exportado em: ' + new Date().toLocaleString('pt-BR') + '    |    Semanas: ' + semanasList.join(', ')]);
+    data.push([]);
+    data.push(headers);
+    ordemTags.forEach(key => {
+      const row = [tagsMap[key].label];
+      semanasList.forEach(s => row.push(tagsMap[key].cells[s] || ''));
+      data.push(row);
+    });
+
+    const ws = XLSX.utils.aoa_to_sheet(data);
+    const lastCol = headers.length - 1;
+    ws['!merges'] = [
+      { s: { r: 0, c: 0 }, e: { r: 0, c: lastCol } },
+      { s: { r: 1, c: 0 }, e: { r: 1, c: lastCol } },
+    ];
+    ws['!cols'] = headers.map((h, ci) => {
+      let max = h.length;
+      data.slice(4).forEach(row => { const v = String(row[ci] || ''); if (v.length > max) max = v.length; });
+      return { wch: Math.min(Math.max(max + 2, 10), 40) };
+    });
+    ws['!autofilter'] = { ref: XLSX.utils.encode_range({ s: { r: 3, c: 0 }, e: { r: 3, c: lastCol } }) };
+    const wb = XLSX.utils.book_new();
+    const nomeAba = sanitizarNome('Hist_' + String(dados.draft)).slice(0, 31);
+    XLSX.utils.book_append_sheet(wb, ws, nomeAba);
+    XLSX.writeFile(wb, 'epc13_historico_matriz_tags_draft_' + sanitizarNome(String(dados.draft)) + '.xlsx');
   }
 
   async function exportarTagSituacao() {
@@ -265,7 +360,24 @@ export default function ItemModal({ item, onClose, onSave, onDelete, todosItens 
                   onKeyDown={e => { if (e.key === 'Enter') adicionarTag(); }}
                   placeholder="Nova TAG..." style={{ ...inputEstilo, width: 160 }} />
                 <button onClick={adicionarTag} style={btnEstilo('#007a33')}>+ Nova TAG</button>
-                <button onClick={exportarTagSituacao} style={btnEstilo('#6a1b9a')}>📤 Exportar TAG × Situação</button>
+              </div>
+              <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+                {dados.draft && (
+                  <button onClick={exportarTagsDestaSemana} style={btnEstilo('#00838f')}
+                    title="Exporta as TAGs deste Draft, nesta semana — uma TAG por linha">
+                    📥 Exportar TAGs desta semana
+                  </button>
+                )}
+                {dados.draft && (
+                  <button onClick={exportarMatrizTagsDraft} style={btnEstilo('#6a1b9a')}
+                    title="Exporta o histórico completo do Draft: uma TAG por linha, uma coluna por semana">
+                    📊 Exportar histórico do Draft (TAG × Semana)
+                  </button>
+                )}
+                <button onClick={exportarTagSituacao} style={btnEstilo('#6a1b9a')}
+                  title="TAG na coluna A e Situação na coluna F — mesmo formato aceito por Atualizar Situações das TAGs">
+                  📤 Exportar TAG × Situação
+                </button>
               </div>
 
               {historicoTags.length > 0 && (
@@ -582,6 +694,12 @@ function btnEstilo(cor, texto) {
 }
 const secaoEstilo = { background: '#fafcfa', border: '1px solid #e0eae0', borderRadius: 10, padding: 14, marginBottom: 14 };
 const secaoLabelEstilo = { fontSize: 12, fontWeight: 'bold', color: '#007a33', marginBottom: 10, textTransform: 'uppercase', letterSpacing: .3 };
+// troca caracteres proibidos em nome de arquivo/aba do Excel por "_"
+function sanitizarNome(texto) {
+  const proibidos = ['\\', '/', '?', '*', '[', ']', ':', ' '];
+  return String(texto || '').split('').map(ch => proibidos.includes(ch) ? '_' : ch).join('');
+}
+
 function flagEstilo(cor) {
   return { display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 'bold',
     padding: '3px 10px', borderRadius: 12, whiteSpace: 'nowrap', background: cor, color: '#fff' };
