@@ -28,6 +28,7 @@ export default function Aderencia() {
   const [pendentesDiaAtivo, setPendentesDiaAtivo] = useState(false);
   const [pendentesDia, setPendentesDia] = useState('');
   const [itemAberto, setItemAberto] = useState(null);
+  const [avisoBusca, setAvisoBusca] = useState(null); // null | 'nenhuma' | ['31','35',...]
   const [novoItem, setNovoItem] = useState({ item: '', assunto: '', draft: '', disciplina: '', responsavel: '' });
   const [ptAberto, setPtAberto] = useState(false);
   const [relatorioAberto, setRelatorioAberto] = useState(false);
@@ -270,6 +271,29 @@ export default function Aderencia() {
     return lista;
   }, [itens, busca, ordenarPor, pendentesDiaAtivo, pendentesDia]);
 
+  useEffect(() => {
+    verificarBuscaOutrasSemanas();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [busca, itensFiltrados.length, semanaAtivaId]);
+
+  async function verificarBuscaOutrasSemanas() {
+    const termos = busca.split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
+    if (!termos.length || itensFiltrados.length > 0) { setAvisoBusca(null); return; }
+
+    const semanasComMatch = [];
+    for (const s of semanas) {
+      if (s.id === semanaAtivaId) continue;
+      const { data } = await supabase.from('itens').select('draft, tags').eq('semana_id', s.id);
+      const tem = (data || []).some(it => {
+        const draftNorm = (it.draft || '').toLowerCase();
+        const tagsNorm = (it.tags || []).map(t => t.toLowerCase());
+        return termos.some(t => draftNorm.includes(t) || tagsNorm.some(tg => tg.includes(t)));
+      });
+      if (tem) semanasComMatch.push(s.numero);
+    }
+    setAvisoBusca(semanasComMatch.length ? semanasComMatch : 'nenhuma');
+  }
+
   return (
     <div>
       <header style={{ background: 'linear-gradient(135deg,#00341a,#007a33)', color: '#fff', padding: '14px 20px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 14, position: 'relative' }}>
@@ -296,6 +320,28 @@ export default function Aderencia() {
           📋 Pendentes do dia
         </button>
       </div>
+
+      {avisoBusca && (
+        <div style={{ background: '#fff3e0', padding: '8px 20px', display: 'flex', justifyContent: 'center', gap: 8, alignItems: 'center', flexWrap: 'wrap', borderBottom: '1px solid #ffcc80' }}>
+          {avisoBusca === 'nenhuma' ? (
+            <span style={{ fontSize: 12, color: '#8a4b00', fontWeight: 'bold' }}>❌ Nenhum resultado encontrado em nenhuma semana para "{busca}".</span>
+          ) : (
+            <>
+              <span style={{ fontSize: 12, color: '#8a4b00', fontWeight: 'bold' }}>⚠️ Nada encontrado na semana atual. Encontrado em:</span>
+              {avisoBusca.map(num => {
+                const s = semanas.find(x => x.numero === num);
+                return (
+                  <button key={num} onClick={() => s && setSemanaAtivaId(s.id)}
+                    style={{ background: '#8a4b00', color: '#fff', border: 'none', borderRadius: 14, padding: '4px 12px', fontSize: 11, fontWeight: 'bold', cursor: 'pointer' }}>
+                    Semana {num}
+                  </button>
+                );
+              })}
+            </>
+          )}
+        </div>
+      )}
+
       {pendentesDiaAtivo && (
         <div style={{ background: '#fff3e0', padding: '8px 20px', display: 'flex', justifyContent: 'center', gap: 10, alignItems: 'center' }}>
           <span style={{ fontSize: 12, color: '#8a4b00', fontWeight: 'bold' }}>Ver não preenchidos em:</span>
@@ -359,12 +405,6 @@ export default function Aderencia() {
                 );
               })}
             </div>
-
-            {(it.tags || []).length > 0 && (
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 10 }}>
-                {it.tags.map(t => <span key={t} style={{ background: '#e8f5e9', color: '#007a33', borderRadius: 12, padding: '3px 10px', fontSize: 11 }}>{t}</span>)}
-              </div>
-            )}
           </div>
         ))}
       </div>
@@ -391,7 +431,6 @@ export default function Aderencia() {
               <button onClick={exportarExcel} style={{ ...btnEstilo('#e8f5e9', '#005a27'), textAlign: 'left' }}>📊 Exportar Excel</button>
               <div style={{ fontSize: 11, fontWeight: 'bold', color: '#007a33', textTransform: 'uppercase', marginTop: 10, paddingTop: 8, borderTop: '1px solid #ddd' }}>Relatórios</div>
               <button onClick={() => { setRelatorioAberto(true); setMenuAberto(false); }} style={{ ...btnEstilo('#e8f5e9', '#005a27'), textAlign: 'left' }}>📈 Relatório & Histórico</button>
-              <button onClick={() => { setPtAberto(true); setMenuAberto(false); }} style={{ ...btnEstilo('#e8f5e9', '#005a27'), textAlign: 'left' }}>📄 Emissão de PT</button>
               <div style={{ fontSize: 11, color: '#999', marginTop: 10, padding: '10px 4px 0', borderTop: '1px solid #ddd' }}>
                 Atualizar Situações das TAGs por Excel chega na próxima atualização.
               </div>
@@ -403,6 +442,14 @@ export default function Aderencia() {
       {itemAberto && (
         <ItemModal item={itemAberto} onClose={() => setItemAberto(null)} onSave={salvarItem} onDelete={excluirItem} />
       )}
+
+      <button onClick={() => setPtAberto(true)} style={{
+        position: 'fixed', top: '50%', right: 0, transform: 'translateY(-50%) rotate(-90deg)', transformOrigin: 'right bottom',
+        background: '#1b5e20', color: '#fff', fontWeight: 'bold', fontSize: 13, padding: '10px 18px', borderRadius: '8px 8px 0 0',
+        cursor: 'pointer', zIndex: 750, boxShadow: '-2px 0 10px rgba(0,0,0,.25)', letterSpacing: .3, border: 'none', userSelect: 'none',
+      }}>
+        📄 Emissão de PT
+      </button>
 
       <PTDrawer aberto={ptAberto} onClose={() => setPtAberto(false)} itens={itensFiltrados} onAtualizado={() => carregarItens(semanaAtivaId)} />
 
