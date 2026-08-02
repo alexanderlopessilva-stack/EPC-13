@@ -31,7 +31,7 @@ export default function Aderencia() {
   const [itemAberto, setItemAberto] = useState(null);
   const [avisoBusca, setAvisoBusca] = useState(null); // null | 'nenhuma' | ['31','35',...]
   const [diffAtualizacao, setDiffAtualizacao] = useState(null);
-  const [novoItem, setNovoItem] = useState({ item: '', assunto: '', draft: '', disciplina: '', responsavel: '' });
+  const [novoItem, setNovoItem] = useState({ item: '', assunto: '', draft: '', disciplina: '', responsavel: '', fora_programacao: false });
   const [ptAberto, setPtAberto] = useState(false);
   const [relatorioAberto, setRelatorioAberto] = useState(false);
 
@@ -54,6 +54,29 @@ export default function Aderencia() {
     setCarregando(false);
   }
 
+  async function ajustarPeriodo(novaDataInicio) {
+    if (!novaDataInicio || !semanaAtiva) return;
+    const dtInicio = new Date(novaDataInicio + 'T00:00:00');
+    const dtFim = new Date(dtInicio);
+    dtFim.setDate(dtFim.getDate() + 6);
+    const periodoFim = dtFim.toISOString().slice(0, 10);
+    await supabase.from('semanas').update({ periodo_inicio: novaDataInicio, periodo_fim: periodoFim }).eq('id', semanaAtiva.id);
+    carregarSemanas();
+  }
+
+  async function excluirSemana() {
+    if (!semanaAtiva) return;
+    if (semanas.length <= 1) { alert('Não é possível excluir — essa é a única semana existente.'); return; }
+    if (!confirm('Excluir permanentemente a Semana ' + semanaAtiva.numero + '?\n\nIsso apaga ' + itens.length + ' item(ns), TAGs e todo o histórico dela. Essa ação não pode ser desfeita.')) return;
+    const idAtual = semanaAtiva.id;
+    await supabase.from('itens').delete().eq('semana_id', idAtual);
+    await supabase.from('semanas').delete().eq('id', idAtual);
+    const restantes = semanas.filter(s => s.id !== idAtual);
+    setSemanaAtivaId(restantes.length ? restantes[restantes.length - 1].id : null);
+    await carregarSemanas();
+    setMenuAberto(false);
+  }
+
   async function criarSemana() {
     const numero = prompt('Número da nova semana (ex: 15):');
     if (!numero || !numero.trim()) return;
@@ -71,7 +94,7 @@ export default function Aderencia() {
       aderencia_dias: {}, tags: [], tags_situacoes: {}, emissao_pt: {},
     });
     if (error) { alert('Erro: ' + error.message); return; }
-    setNovoItem({ item: '', assunto: '', draft: '', disciplina: '', responsavel: '' });
+    setNovoItem({ item: '', assunto: '', draft: '', disciplina: '', responsavel: '', fora_programacao: false });
     carregarItens(semanaAtivaId);
   }
 
@@ -424,6 +447,42 @@ export default function Aderencia() {
     e.target.value = '';
   }
 
+  async function exportarEngenharia() {
+    const XLSX = await import('xlsx');
+    const linhas = [];
+    itensFiltrados.forEach(it => {
+      const tags = it.tags || [];
+      const sits = it.tags_situacoes || {};
+      if (tags.length === 0) {
+        linhas.push({
+          Item: it.item, Draft: it.draft, Assunto: it.assunto, Área: it.area, Unidade: it.unidade,
+          Disciplina: it.disciplina, Responsável: it.responsavel, TAG: '', 'Situação da TAG': '',
+          Devolutiva: it.devolutiva_texto || '', Executável: rotuloExecutavel(it.devolutiva_executavel),
+        });
+      } else {
+        tags.forEach(t => {
+          linhas.push({
+            Item: it.item, Draft: it.draft, Assunto: it.assunto, Área: it.area, Unidade: it.unidade,
+            Disciplina: it.disciplina, Responsável: it.responsavel,
+            TAG: t, 'Situação da TAG': sits[t.trim().toLowerCase()] || '',
+            Devolutiva: it.devolutiva_texto || '', Executável: rotuloExecutavel(it.devolutiva_executavel),
+          });
+        });
+      }
+    });
+    const ws = XLSX.utils.json_to_sheet(linhas);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Engenharia');
+    XLSX.writeFile(wb, 'engenharia_semana' + (semanaAtiva ? semanaAtiva.numero : '') + '.xlsx');
+    setMenuAberto(false);
+  }
+  function rotuloExecutavel(v) {
+    if (v === 'sim') return 'Sim';
+    if (v === 'sim_alt') return 'Sim, com alteração';
+    if (v === 'nao') return 'Não';
+    return 'Pendente';
+  }
+
   async function exportarExcel() {
     const XLSX = await import('xlsx');
     const linhas = itensFiltrados.map(it => ({
@@ -459,6 +518,8 @@ export default function Aderencia() {
     if (ordenarPor) {
       lista.sort((a, b) => String(a[ordenarPor] || '').localeCompare(String(b[ordenarPor] || '')));
     }
+    // itens "fora da programação" sempre no topo, seja qual for a ordenação escolhida
+    lista.sort((a, b) => (b.fora_programacao ? 1 : 0) - (a.fora_programacao ? 1 : 0));
     return lista;
   }, [itens, busca, ordenarPor, pendentesDiaAtivo, pendentesDia]);
 
@@ -490,16 +551,28 @@ export default function Aderencia() {
       <header style={{ background: 'linear-gradient(135deg,#00341a,#007a33)', color: '#fff', padding: '14px 20px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 14, position: 'relative' }}>
         <Link href="/" style={{ position: 'absolute', left: 20, color: '#fff', textDecoration: 'none', fontSize: 13 }}>← EPC13</Link>
         <h1 style={{ margin: 0, fontSize: 20 }}>Programação de atividades semanal EPC13</h1>
-        <button onClick={() => setMenuAberto(true)} style={{ position: 'absolute', right: 20, ...btnEstilo('rgba(255,255,255,.15)') , border: '1.5px solid rgba(255,255,255,.4)'}}>☰ Menu</button>
+        <button onClick={() => setMenuAberto(true)} style={{ position: 'absolute', left: 20, ...btnEstilo('rgba(255,255,255,.15)') , border: '1.5px solid rgba(255,255,255,.4)'}}>☰ Menu</button>
       </header>
 
       {/* Navegador de semana */}
       <div style={{ background: 'linear-gradient(135deg,#00341a,#007a33)', padding: '10px 20px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 14, flexWrap: 'wrap' }}>
         <button disabled={idxAtiva <= 0} onClick={() => setSemanaAtivaId(semanas[idxAtiva - 1].id)} style={navBtnEstilo}>◀</button>
         <select value={semanaAtivaId || ''} onChange={e => setSemanaAtivaId(e.target.value)} style={{ padding: '6px 14px', borderRadius: 8, border: 'none', fontWeight: 'bold', color: '#005a27' }}>
-          {semanas.map(s => <option key={s.id} value={s.id}>📅 SEMANA {s.numero}</option>)}
+          {semanas.map(s => {
+            const passada = s.periodo_fim && new Date(s.periodo_fim + 'T23:59:59') < new Date();
+            return <option key={s.id} value={s.id} style={{ color: passada ? '#999' : '#005a27' }}>📅 SEMANA {s.numero}{passada ? ' (passada)' : ''}</option>;
+          })}
         </select>
         <button disabled={idxAtiva >= semanas.length - 1} onClick={() => setSemanaAtivaId(semanas[idxAtiva + 1].id)} style={navBtnEstilo}>▶</button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#fff' }}>
+          <span>Período:</span>
+          <input type="date" value={semanaAtiva && semanaAtiva.periodo_inicio ? semanaAtiva.periodo_inicio : ''}
+            onChange={e => ajustarPeriodo(e.target.value)}
+            style={{ padding: '5px 8px', borderRadius: 6, border: 'none', fontSize: 12 }} />
+          <span>até</span>
+          <input type="date" value={semanaAtiva && semanaAtiva.periodo_fim ? semanaAtiva.periodo_fim : ''} readOnly
+            style={{ padding: '5px 8px', borderRadius: 6, border: 'none', fontSize: 12, background: '#eee', color: '#666' }} />
+        </div>
       </div>
 
       {/* Busca */}
@@ -567,6 +640,10 @@ export default function Aderencia() {
             <input placeholder="Draft" value={novoItem.draft} onChange={e => setNovoItem({ ...novoItem, draft: e.target.value })} style={{ ...inputEstilo, width: 120 }} />
             <input placeholder="Disciplina" value={novoItem.disciplina} onChange={e => setNovoItem({ ...novoItem, disciplina: e.target.value })} style={{ ...inputEstilo, width: 120 }} />
             <input placeholder="Responsável" value={novoItem.responsavel} onChange={e => setNovoItem({ ...novoItem, responsavel: e.target.value })} style={{ ...inputEstilo, width: 140 }} />
+            <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: '#e65100', fontWeight: 'bold' }}>
+              <input type="checkbox" checked={novoItem.fora_programacao} onChange={e => setNovoItem({ ...novoItem, fora_programacao: e.target.checked })} />
+              ⚡ Fora da programação
+            </label>
             <button onClick={adicionarItem} style={btnEstilo('#007a33')}>Adicionar</button>
           </div>
         </div>
@@ -575,8 +652,14 @@ export default function Aderencia() {
         {!carregando && itensFiltrados.length === 0 && <div style={{ textAlign: 'center', color: '#888', padding: 30 }}>Nenhum item encontrado.</div>}
 
         {itensFiltrados.map(it => (
-          <div key={it.id} style={{ background: '#fff', borderRadius: 12, padding: 16, marginBottom: 14, boxShadow: '0 1px 8px rgba(0,0,0,.08)', cursor: 'pointer' }}
+          <div key={it.id} style={{ background: '#fff', borderRadius: 12, padding: 16, marginBottom: 14, boxShadow: '0 1px 8px rgba(0,0,0,.08)', cursor: 'pointer',
+            border: it.fora_programacao ? '2px solid #e65100' : 'none' }}
             onClick={() => setItemAberto(it)}>
+            {it.fora_programacao && (
+              <div style={{ textAlign: 'center', fontSize: 11, fontWeight: 'bold', color: '#e65100', background: '#fff3e0', borderRadius: 8, padding: '2px 8px', marginBottom: 8, display: 'inline-block' }}>
+                ⚡ Fora da programação
+              </div>
+            )}
             <div style={{ textAlign: 'center', fontSize: 18, fontWeight: 'bold', color: '#005a27', background: '#e8f5e9', border: '1px solid #a5d6a7', borderRadius: 6, padding: '4px 8px', marginBottom: 8 }}>
               DRAFT {it.draft || '-'}
             </div>
@@ -611,6 +694,7 @@ export default function Aderencia() {
             </div>
             <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 8 }}>
               <button onClick={criarSemana} style={{ ...btnEstilo('#e8f5e9', '#005a27'), textAlign: 'left' }}>🗓️ Nova Semana</button>
+              <button onClick={excluirSemana} style={{ ...btnEstilo('#fdecea', '#c0392b'), textAlign: 'left' }}>🗑 Excluir Semana Atual</button>
               <label style={{ ...btnEstilo('#fff3e0', '#8a4b00'), textAlign: 'left', cursor: 'pointer', display: 'block', border: '1.5px dashed #ffb74d' }}>
                 🗂️ Adicionar Semana Anterior
                 <input type="file" accept=".xlsx,.xls,.csv" onChange={adicionarSemanaAnterior} style={{ display: 'none' }} />
@@ -632,6 +716,7 @@ export default function Aderencia() {
                 <input type="file" accept=".xlsx,.xls,.csv" onChange={importarExcel} style={{ display: 'none' }} />
               </label>
               <button onClick={exportarExcel} style={{ ...btnEstilo('#e8f5e9', '#005a27'), textAlign: 'left' }}>📊 Exportar Excel</button>
+              <button onClick={exportarEngenharia} style={{ ...btnEstilo('#e8f5e9', '#005a27'), textAlign: 'left' }}>📤 Exportar p/ Engenharia</button>
               <div style={{ fontSize: 11, fontWeight: 'bold', color: '#007a33', textTransform: 'uppercase', marginTop: 10, paddingTop: 8, borderTop: '1px solid #ddd' }}>Relatórios</div>
               <button onClick={() => { setRelatorioAberto(true); setMenuAberto(false); }} style={{ ...btnEstilo('#e8f5e9', '#005a27'), textAlign: 'left' }}>📈 Relatório & Histórico</button>
             </div>
@@ -640,7 +725,7 @@ export default function Aderencia() {
       )}
 
       {itemAberto && (
-        <ItemModal item={itemAberto} onClose={() => setItemAberto(null)} onSave={salvarItem} onDelete={excluirItem} />
+        <ItemModal item={itemAberto} onClose={() => setItemAberto(null)} onSave={salvarItem} onDelete={excluirItem} todosItens={itens} />
       )}
 
       <button onClick={() => setPtAberto(true)} style={{

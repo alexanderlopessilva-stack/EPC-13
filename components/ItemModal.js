@@ -12,12 +12,16 @@ const STATUS_INFO = {
   semprog:  { label: '—',  cor: '#757575', texto: '#fff' },
 };
 
-export default function ItemModal({ item, onClose, onSave, onDelete }) {
+export default function ItemModal({ item, onClose, onSave, onDelete, todosItens }) {
   const [aba, setAba] = useState('dados');
   const [dados, setDados] = useState(item);
   const [novaTag, setNovaTag] = useState('');
   const [historicoTags, setHistoricoTags] = useState([]);
   const [diaSelecionado, setDiaSelecionado] = useState(null);
+  const [picker, setPicker] = useState(null);   // null | 'partial' | 'fin' | 'copy'
+  const [partialState, setPartialState] = useState({});
+  const [finDia, setFinDia] = useState(null);
+  const [copySrcId, setCopySrcId] = useState('');
 
   useEffect(() => { setDados(item); }, [item]);
   useEffect(() => {
@@ -32,8 +36,6 @@ export default function ItemModal({ item, onClose, onSave, onDelete }) {
     setHistoricoTags(todas);
   }
 
-  // Duas TAGs são "a mesma coisa" quando uma é a base/prefixo da outra
-  // (ex: 6"-AQ-5123-1263 e 6"-AQ-5123-1263-Mb-NI)
   function tagsSaoEquivalentes(a, b) {
     const na = String(a || '').trim().toLowerCase().replace(/\s+/g, '');
     const nb = String(b || '').trim().toLowerCase().replace(/\s+/g, '');
@@ -41,12 +43,13 @@ export default function ItemModal({ item, onClose, onSave, onDelete }) {
     if (na === nb) return true;
     return na.startsWith(nb) || nb.startsWith(na);
   }
-  function tagEhRepetida(t) {
-    return historicoTags.some(ht => tagsSaoEquivalentes(ht, t));
-  }
+  function tagEhRepetida(t) { return historicoTags.some(ht => tagsSaoEquivalentes(ht, t)); }
 
-  function campo(chave, valor) {
-    setDados(prev => ({ ...prev, [chave]: valor }));
+  function campo(chave, valor) { setDados(prev => ({ ...prev, [chave]: valor })); }
+
+  function temAlgumDiaPreenchido() {
+    const dias = dados.aderencia_dias || {};
+    return DIAS.some(d => dias[d] && dias[d].status);
   }
 
   function alternarDia(dia) {
@@ -60,11 +63,78 @@ export default function ItemModal({ item, onClose, onSave, onDelete }) {
     const diasAtual = dados.aderencia_dias || {};
     campo('aderencia_dias', { ...diasAtual, [dia]: { ...(diasAtual[dia] || {}), obs: texto } });
   }
-
   function preencherSemana(status) {
+    if (temAlgumDiaPreenchido() && !confirm('Este item já possui dias preenchidos.\nDeseja sobrescrever?')) return;
     const novo = {};
-    DIAS.forEach(d => { novo[d] = { status }; });
+    DIAS.forEach(d => { novo[d] = { ...(dados.aderencia_dias || {})[d], status }; });
     campo('aderencia_dias', novo);
+  }
+  // "Semana não executada": Seg-Sex como não executado, fim de semana como sem programação
+  function preencherSemanaNok() {
+    if (temAlgumDiaPreenchido() && !confirm('Este item já possui dias preenchidos.\nDeseja sobrescrever?')) return;
+    const novo = {};
+    DIAS.forEach(d => {
+      const st = (d === 'Sáb' || d === 'Dom') ? 'semprog' : 'nok';
+      novo[d] = { ...(dados.aderencia_dias || {})[d], status: st };
+    });
+    campo('aderencia_dias', novo);
+  }
+
+  function abrirPartial() {
+    const st = {};
+    DIAS.forEach(d => { st[d] = ((dados.aderencia_dias || {})[d] || {}).status || ''; });
+    setPartialState(st);
+    setPicker('partial');
+  }
+  function ciclarPartial(dia) {
+    const cycle = ['ok', 'nok', 'fin', 'semprog', ''];
+    const cur = partialState[dia] || '';
+    setPartialState(prev => ({ ...prev, [dia]: cycle[(cycle.indexOf(cur) + 1) % cycle.length] }));
+  }
+  function aplicarPartial() {
+    if (temAlgumDiaPreenchido() && !confirm('Este item já possui dias preenchidos.\nDeseja sobrescrever?')) return;
+    const diasAtual = dados.aderencia_dias || {};
+    const novo = { ...diasAtual };
+    DIAS.forEach(d => { novo[d] = { ...(diasAtual[d] || {}), status: partialState[d] || '' }; });
+    campo('aderencia_dias', novo);
+    setPicker(null);
+  }
+
+  // "Finalizado em X": dias até X viram executado, os seguintes viram finalizado
+  function aplicarFin() {
+    if (!finDia) { alert('Selecione o dia de conclusão!'); return; }
+    if (temAlgumDiaPreenchido() && !confirm('Este item já possui dias preenchidos.\nDeseja sobrescrever?')) return;
+    const idxFim = DIAS.indexOf(finDia);
+    const diasAtual = dados.aderencia_dias || {};
+    const novo = {};
+    DIAS.forEach((d, idx) => { novo[d] = { ...(diasAtual[d] || {}), status: idx <= idxFim ? 'ok' : 'fin' }; });
+    campo('aderencia_dias', novo);
+    setPicker(null); setFinDia(null);
+  }
+
+  function aplicarCopy() {
+    if (!copySrcId) { alert('Selecione um item!'); return; }
+    const src = (todosItens || []).find(i => i.id === copySrcId);
+    if (!src) return;
+    if (temAlgumDiaPreenchido() && !confirm('Este item já possui dias preenchidos.\nDeseja sobrescrever?')) return;
+    campo('aderencia_dias', JSON.parse(JSON.stringify(src.aderencia_dias || {})));
+    setPicker(null); setCopySrcId('');
+  }
+
+  function setProgresso(val) {
+    const prev = dados.progresso;
+    const novo = prev === val ? '' : val;
+    campo('progresso', novo);
+    if (val === 'niniciado' && prev !== 'niniciado') {
+      if (!temAlgumDiaPreenchido() || confirm('Deseja preencher automaticamente como "Não executado"?')) {
+        const diasNovo = {};
+        DIAS.forEach(d => {
+          const st = (d === 'Sáb' || d === 'Dom') ? 'semprog' : 'nok';
+          diasNovo[d] = { ...(dados.aderencia_dias || {})[d], status: st };
+        });
+        setDados(prev2 => ({ ...prev2, progresso: novo, aderencia_dias: diasNovo }));
+      }
+    }
   }
 
   function adicionarTag() {
@@ -83,10 +153,6 @@ export default function ItemModal({ item, onClose, onSave, onDelete }) {
     campo('tags_situacoes', { ...(dados.tags_situacoes || {}), [t.trim().toLowerCase()]: texto });
   }
 
-  function salvarEFechar() {
-    onSave(dados);
-  }
-
   const TABS = [
     { key: 'dados', label: '📋 Dados' },
     { key: 'tags', label: '🏷️ TAGs' },
@@ -99,10 +165,11 @@ export default function ItemModal({ item, onClose, onSave, onDelete }) {
       <div style={modalEstilo}>
         <button onClick={onClose} style={closeXEstilo} title="Fechar">✕</button>
 
-        <div style={{ background: 'linear-gradient(135deg,#00341a,#007a33)', color: '#fff', padding: '14px 20px', borderRadius: '14px 14px 0 0' }}>
+        <div style={{ background: 'linear-gradient(135deg,#00341a,#007a33)', color: '#fff', padding: '14px 20px', borderRadius: '14px 14px 0 0', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <b>ITEM {dados.item || '-'}</b>
+          {dados.fora_programacao && <span style={{ background: '#fff3e0', color: '#e65100', borderRadius: 10, padding: '2px 8px', fontSize: 11, fontWeight: 'bold' }}>⚡ Fora da programação</span>}
         </div>
-        <div style={{ textAlign: 'center', fontSize: 20, fontWeight: 'bold', color: '#005a27', background: '#e8f5e9', padding: '10px 20px', borderBottom: '1px solid #c8e6c9' }}>
+        <div style={{ textAlign: 'center', fontSize: 22, fontWeight: 'bold', color: '#005a27', background: '#e8f5e9', padding: '12px 20px', borderBottom: '1px solid #c8e6c9', letterSpacing: .5 }}>
           DRAFT {dados.draft || '-'}
         </div>
 
@@ -132,6 +199,12 @@ export default function ItemModal({ item, onClose, onSave, onDelete }) {
               <Campo label="Requisitante 2" value={dados.requisitante2} onChange={v => campo('requisitante2', v)} />
               <Campo label="Matrícula 2" value={dados.matricula2} onChange={v => campo('matricula2', v)} />
               <Campo label="Atividade" full value={dados.atividade} onChange={v => campo('atividade', v)} />
+              <div style={{ gridColumn: 'span 2' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#e65100', fontWeight: 'bold' }}>
+                  <input type="checkbox" checked={!!dados.fora_programacao} onChange={e => campo('fora_programacao', e.target.checked)} />
+                  ⚡ Item fora da programação
+                </label>
+              </div>
             </div>
           )}
 
@@ -172,21 +245,82 @@ export default function ItemModal({ item, onClose, onSave, onDelete }) {
             <div>
               <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
                 <button onClick={() => preencherSemana('ok')} style={btnEstilo('#007a33')}>✔ Semana executada</button>
-                <button onClick={() => preencherSemana('nok')} style={btnEstilo('#c62828')}>✘ Semana não executada</button>
+                <button onClick={preencherSemanaNok} style={btnEstilo('#c62828')}>✘ Semana não executada</button>
                 <button onClick={() => preencherSemana('semprog')} style={btnEstilo('#757575')}>🚫 Sem programação</button>
+                <button onClick={abrirPartial} style={btnEstilo('#1565c0')}>📅 Semana parcial</button>
+                <button onClick={() => { setFinDia(null); setPicker('fin'); }} style={btnEstilo('#0288d1')}>★ Finalizado em...</button>
+                <button onClick={() => setPicker('copy')} style={btnEstilo('#6a1b9a')}>📋 Copiar de outro item</button>
               </div>
+
+              {picker === 'partial' && (
+                <div style={pickerEstilo('#1565c0')}>
+                  <div style={{ fontSize: 12, fontWeight: 'bold', color: '#1565c0', marginBottom: 8 }}>Clique nos dias para alternar o status:</div>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
+                    {DIAS.map(d => {
+                      const st = partialState[d] || '';
+                      const info = STATUS_INFO[st];
+                      return <button key={d} onClick={() => ciclarPartial(d)}
+                        style={{ background: info.cor, color: info.texto, border: 'none', borderRadius: 6, padding: '8px 12px', fontSize: 12, fontWeight: 'bold', cursor: 'pointer' }}>
+                        {d} {info.label}
+                      </button>;
+                    })}
+                  </div>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button onClick={aplicarPartial} style={btnEstilo('#1565c0')}>✔ Aplicar</button>
+                    <button onClick={() => setPicker(null)} style={btnEstilo('#ddd', '#555')}>Cancelar</button>
+                  </div>
+                </div>
+              )}
+
+              {picker === 'fin' && (
+                <div style={pickerEstilo('#0288d1')}>
+                  <div style={{ fontSize: 12, fontWeight: 'bold', color: '#0288d1', marginBottom: 8 }}>Em que dia o serviço foi finalizado?</div>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
+                    {DIAS.map(d => (
+                      <button key={d} onClick={() => setFinDia(d)}
+                        style={{ background: finDia === d ? '#0288d1' : '#fff', color: finDia === d ? '#fff' : '#0288d1',
+                          border: '1.5px solid #0288d1', borderRadius: 6, padding: '8px 12px', fontSize: 12, fontWeight: 'bold', cursor: 'pointer' }}>
+                        {d}
+                      </button>
+                    ))}
+                  </div>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button onClick={aplicarFin} style={btnEstilo('#0288d1')}>✔ Aplicar</button>
+                    <button onClick={() => setPicker(null)} style={btnEstilo('#ddd', '#555')}>Cancelar</button>
+                  </div>
+                </div>
+              )}
+
+              {picker === 'copy' && (
+                <div style={pickerEstilo('#6a1b9a')}>
+                  <div style={{ fontSize: 12, fontWeight: 'bold', color: '#6a1b9a', marginBottom: 8 }}>Copiar a aderência de qual item?</div>
+                  <select value={copySrcId} onChange={e => setCopySrcId(e.target.value)} style={{ ...inputEstilo, width: '100%', marginBottom: 10 }}>
+                    <option value="">— selecione —</option>
+                    {(todosItens || []).filter(i => i.id !== dados.id).map(i => (
+                      <option key={i.id} value={i.id}>ITEM {i.item} — {i.assunto}</option>
+                    ))}
+                  </select>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button onClick={aplicarCopy} style={btnEstilo('#6a1b9a')}>✔ Aplicar</button>
+                    <button onClick={() => setPicker(null)} style={btnEstilo('#ddd', '#555')}>Cancelar</button>
+                  </div>
+                </div>
+              )}
+
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                 {DIAS.map(d => {
                   const st = (dados.aderencia_dias && dados.aderencia_dias[d] && dados.aderencia_dias[d].status) || '';
                   const info = STATUS_INFO[st];
+                  const temObs = dados.aderencia_dias && dados.aderencia_dias[d] && dados.aderencia_dias[d].obs;
                   return (
                     <button key={d} onClick={() => alternarDia(d)}
                       style={{ background: info.cor, color: info.texto, border: d === diaSelecionado ? '2.5px solid #333' : 'none', borderRadius: 8, padding: '10px 14px', fontSize: 13, fontWeight: 'bold', cursor: 'pointer', minWidth: 56 }}>
-                      {d}<br />{info.label}
+                      {d}<br />{info.label}{temObs ? ' 📝' : ''}
                     </button>
                   );
                 })}
               </div>
+
               {diaSelecionado && (
                 <div style={{ marginTop: 16 }}>
                   <label style={labelEstilo}>📝 Observação de {diaSelecionado}</label>
@@ -196,6 +330,25 @@ export default function ItemModal({ item, onClose, onSave, onDelete }) {
                     rows={3} style={{ ...inputEstilo, width: '100%', resize: 'vertical' }} />
                 </div>
               )}
+
+              <div style={{ marginTop: 20, paddingTop: 16, borderTop: '1px solid #eee' }}>
+                <label style={labelEstilo}>Progresso geral do item</label>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+                  {[['andamento', '↻ Em andamento'], ['concluido', '✔ Concluído'], ['niniciado', '○ Não iniciado']].map(([v, l]) => (
+                    <button key={v} onClick={() => setProgresso(v)}
+                      style={btnEstilo(dados.progresso === v ? '#007a33' : '#eee', dados.progresso === v ? '#fff' : '#555')}>
+                      {l}
+                    </button>
+                  ))}
+                </div>
+                {dados.progresso === 'niniciado' && (
+                  <div>
+                    <label style={labelEstilo}>Motivo de não ter iniciado</label>
+                    <textarea value={dados.motivo_niniciado || ''} onChange={e => campo('motivo_niniciado', e.target.value)}
+                      rows={2} style={{ ...inputEstilo, width: '100%', resize: 'vertical' }} />
+                  </div>
+                )}
+              </div>
             </div>
           )}
 
@@ -205,9 +358,9 @@ export default function ItemModal({ item, onClose, onSave, onDelete }) {
               <textarea value={dados.devolutiva_texto || ''} onChange={e => campo('devolutiva_texto', e.target.value)}
                 rows={4} style={{ ...inputEstilo, width: '100%', resize: 'vertical' }} />
               <label style={{ ...labelEstilo, marginTop: 12 }}>Executável?</label>
-              <div style={{ display: 'flex', gap: 8 }}>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                 {[['sim', '✔ Sim'], ['sim_alt', '✔ Sim c/ alteração'], ['nao', '✘ Não']].map(([v, l]) => (
-                  <button key={v} onClick={() => campo('devolutiva_executavel', v)}
+                  <button key={v} onClick={() => campo('devolutiva_executavel', dados.devolutiva_executavel === v ? null : v)}
                     style={btnEstilo(dados.devolutiva_executavel === v ? '#007a33' : '#ddd', dados.devolutiva_executavel === v ? '#fff' : '#555')}>
                     {l}
                   </button>
@@ -219,7 +372,7 @@ export default function ItemModal({ item, onClose, onSave, onDelete }) {
 
         <div style={{ padding: '14px 20px', borderTop: '1px solid #ddd', display: 'flex', justifyContent: 'space-between' }}>
           <button onClick={() => onDelete(dados.id)} style={btnEstilo('#fdecea', '#c0392b')}>🗑 Excluir item</button>
-          <button onClick={salvarEFechar} style={btnEstilo('#007a33')}>💾 Salvar e fechar</button>
+          <button onClick={() => onSave(dados)} style={btnEstilo('#007a33')}>💾 Salvar e fechar</button>
         </div>
       </div>
     </div>
@@ -236,10 +389,13 @@ function Campo({ label, value, onChange, full }) {
 }
 
 const overlayEstilo = { position: 'fixed', inset: 0, background: 'rgba(0,20,5,.6)', zIndex: 500, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 };
-const modalEstilo = { background: '#fff', width: 640, maxWidth: '96vw', maxHeight: '90vh', borderRadius: 14, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative', boxShadow: '0 8px 40px rgba(0,0,0,.35)' };
+const modalEstilo = { background: '#fff', width: 660, maxWidth: '96vw', maxHeight: '90vh', borderRadius: 14, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative', boxShadow: '0 8px 40px rgba(0,0,0,.35)' };
 const closeXEstilo = { position: 'absolute', top: 10, right: 12, background: 'rgba(0,0,0,.2)', border: 'none', borderRadius: '50%', width: 30, height: 30, color: '#fff', fontWeight: 'bold', cursor: 'pointer', zIndex: 5 };
 const labelEstilo = { display: 'block', fontSize: 11, fontWeight: 'bold', color: '#666', marginBottom: 4, textTransform: 'uppercase' };
 const inputEstilo = { padding: '8px 10px', borderRadius: 7, border: '1px solid #ccc', fontSize: 13, fontFamily: 'Arial' };
 function btnEstilo(cor, texto) {
   return { background: cor, color: texto || '#fff', border: 'none', borderRadius: 7, padding: '8px 14px', fontSize: 12, fontWeight: 'bold', cursor: 'pointer' };
+}
+function pickerEstilo(cor) {
+  return { background: '#f7fbf7', border: '2px solid ' + cor, borderRadius: 12, padding: 14, marginBottom: 16 };
 }
