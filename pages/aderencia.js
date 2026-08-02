@@ -549,9 +549,11 @@ export default function Aderencia() {
   return (
     <div>
       <header style={{ background: 'linear-gradient(135deg,#00341a,#007a33)', color: '#fff', padding: '14px 20px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 14, position: 'relative' }}>
-        <Link href="/" style={{ position: 'absolute', left: 20, color: '#fff', textDecoration: 'none', fontSize: 13 }}>← EPC13</Link>
+        <div style={{ position: 'absolute', left: 20, display: 'flex', alignItems: 'center', gap: 10 }}>
+          <Link href="/" style={{ color: '#fff', textDecoration: 'none', fontSize: 13 }}>← EPC13</Link>
+          <button onClick={() => setMenuAberto(true)} style={{ ...btnEstilo('rgba(255,255,255,.15)'), border: '1.5px solid rgba(255,255,255,.4)' }}>☰ Menu</button>
+        </div>
         <h1 style={{ margin: 0, fontSize: 20 }}>Programação de atividades semanal EPC13</h1>
-        <button onClick={() => setMenuAberto(true)} style={{ position: 'absolute', left: 20, ...btnEstilo('rgba(255,255,255,.15)') , border: '1.5px solid rgba(255,255,255,.4)'}}>☰ Menu</button>
       </header>
 
       {/* Navegador de semana */}

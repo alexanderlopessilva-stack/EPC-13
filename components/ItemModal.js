@@ -2,14 +2,13 @@ import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 
 const DIAS = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom'];
-const STATUS_CICLO = ['', 'ok', 'pend', 'nok', 'fin', 'semprog'];
 const STATUS_INFO = {
-  '':       { label: '—',  cor: '#ddd',    texto: '#666' },
-  ok:       { label: '✔',  cor: '#007a33', texto: '#fff' },
-  pend:     { label: '⚠',  cor: '#f9a825', texto: '#fff' },
-  nok:      { label: '✘',  cor: '#c62828', texto: '#fff' },
-  fin:      { label: '★',  cor: '#0288d1', texto: '#fff' },
-  semprog:  { label: '—',  cor: '#757575', texto: '#fff' },
+  '':       { label: '—',  cor: '#ddd',    texto: '#666', nome: '' },
+  ok:       { label: '✔',  cor: '#007a33', texto: '#fff', nome: 'Executado' },
+  pend:     { label: '⚠',  cor: '#e65100', texto: '#fff', nome: 'C/ pendência' },
+  nok:      { label: '✘',  cor: '#c62828', texto: '#fff', nome: 'Não executado' },
+  fin:      { label: '★',  cor: '#1565c0', texto: '#fff', nome: 'Sol. finalizado' },
+  semprog:  { label: '○',  cor: '#bbb',    texto: '#fff', nome: 'Sem programação' },
 };
 
 export default function ItemModal({ item, onClose, onSave, onDelete, todosItens }) {
@@ -29,11 +28,26 @@ export default function ItemModal({ item, onClose, onSave, onDelete, todosItens 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [item.draft]);
 
+  // busca as TAGs do mesmo Draft em OUTRAS semanas, guardando de qual semana veio cada uma
   async function buscarHistoricoTags() {
-    const { data } = await supabase.from('itens').select('tags').eq('draft', item.draft).neq('id', item.id);
+    const { data } = await supabase
+      .from('itens')
+      .select('tags, semana_id, semanas(numero)')
+      .eq('draft', item.draft)
+      .neq('id', item.id);
     const todas = [];
-    (data || []).forEach(it => (it.tags || []).forEach(t => todas.push(t)));
+    (data || []).forEach(it => {
+      const numeroSemana = it.semanas ? it.semanas.numero : '?';
+      (it.tags || []).forEach(t => todas.push({ tag: t, semana: numeroSemana }));
+    });
     setHistoricoTags(todas);
+  }
+  function semanasOndeTagApareceu(t) {
+    const sems = [];
+    historicoTags.forEach(h => {
+      if (tagsSaoEquivalentes(h.tag, t) && !sems.includes(h.semana)) sems.push(h.semana);
+    });
+    return sems.sort((a, b) => parseInt(a) - parseInt(b));
   }
 
   function tagsSaoEquivalentes(a, b) {
@@ -43,7 +57,7 @@ export default function ItemModal({ item, onClose, onSave, onDelete, todosItens 
     if (na === nb) return true;
     return na.startsWith(nb) || nb.startsWith(na);
   }
-  function tagEhRepetida(t) { return historicoTags.some(ht => tagsSaoEquivalentes(ht, t)); }
+  function tagEhRepetida(t) { return historicoTags.some(h => tagsSaoEquivalentes(h.tag, t)); }
 
   function campo(chave, valor) { setDados(prev => ({ ...prev, [chave]: valor })); }
 
@@ -52,16 +66,19 @@ export default function ItemModal({ item, onClose, onSave, onDelete, todosItens 
     return DIAS.some(d => dias[d] && dias[d].status);
   }
 
-  function alternarDia(dia) {
+  // clicar num status: marca; clicar de novo no mesmo: desmarca (igual ao HTML)
+  function setStatusDia(dia, valor) {
     const diasAtual = dados.aderencia_dias || {};
-    const statusAtual = (diasAtual[dia] && diasAtual[dia].status) || '';
-    const proximoIdx = (STATUS_CICLO.indexOf(statusAtual) + 1) % STATUS_CICLO.length;
-    campo('aderencia_dias', { ...diasAtual, [dia]: { ...(diasAtual[dia] || {}), status: STATUS_CICLO[proximoIdx] } });
-    setDiaSelecionado(dia);
+    const atual = (diasAtual[dia] || {}).status || '';
+    campo('aderencia_dias', { ...diasAtual, [dia]: { ...(diasAtual[dia] || {}), status: atual === valor ? '' : valor } });
   }
-  function atualizarObs(dia, texto) {
+  function atualizarCampoDia(dia, chave, texto) {
     const diasAtual = dados.aderencia_dias || {};
-    campo('aderencia_dias', { ...diasAtual, [dia]: { ...(diasAtual[dia] || {}), obs: texto } });
+    campo('aderencia_dias', { ...diasAtual, [dia]: { ...(diasAtual[dia] || {}), [chave]: texto } });
+  }
+  function temAlgumDiaEm(it) {
+    const dias = it.aderencia_dias || {};
+    return DIAS.some(d => dias[d] && dias[d].status);
   }
   function preencherSemana(status) {
     if (temAlgumDiaPreenchido() && !confirm('Este item já possui dias preenchidos.\nDeseja sobrescrever?')) return;
@@ -228,7 +245,9 @@ export default function ItemModal({ item, onClose, onSave, onDelete, todosItens 
                       <span>
                         <b style={{ fontSize: 13 }}>{t}</b>
                         {repetida
-                          ? <span style={{ color: '#e53935', fontSize: 11, marginLeft: 8, fontWeight: 'bold' }}>🔴 repetida ✔</span>
+                          ? <span style={{ color: '#e53935', fontSize: 11, marginLeft: 8, fontWeight: 'bold' }}>
+                              🔴 repetida ✔ — já pedida na(s) semana(s): {semanasOndeTagApareceu(t).join(', ')}
+                            </span>
                           : <span style={{ color: '#2e9e44', fontSize: 11, marginLeft: 8, fontWeight: 'bold' }}>🟢 nova</span>}
                       </span>
                       <span onClick={() => removerTag(t)} style={{ cursor: 'pointer', color: '#c0392b', fontSize: 13 }}>🗑</span>
@@ -243,111 +262,194 @@ export default function ItemModal({ item, onClose, onSave, onDelete, todosItens 
 
           {aba === 'aderencia' && (
             <div>
-              <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
-                <button onClick={() => preencherSemana('ok')} style={btnEstilo('#007a33')}>✔ Semana executada</button>
-                <button onClick={preencherSemanaNok} style={btnEstilo('#c62828')}>✘ Semana não executada</button>
-                <button onClick={() => preencherSemana('semprog')} style={btnEstilo('#757575')}>🚫 Sem programação</button>
-                <button onClick={abrirPartial} style={btnEstilo('#1565c0')}>📅 Semana parcial</button>
-                <button onClick={() => { setFinDia(null); setPicker('fin'); }} style={btnEstilo('#0288d1')}>★ Finalizado em...</button>
-                <button onClick={() => setPicker('copy')} style={btnEstilo('#6a1b9a')}>📋 Copiar de outro item</button>
-              </div>
-
-              {picker === 'partial' && (
-                <div style={pickerEstilo('#1565c0')}>
-                  <div style={{ fontSize: 12, fontWeight: 'bold', color: '#1565c0', marginBottom: 8 }}>Clique nos dias para alternar o status:</div>
-                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
-                    {DIAS.map(d => {
-                      const st = partialState[d] || '';
-                      const info = STATUS_INFO[st];
-                      return <button key={d} onClick={() => ciclarPartial(d)}
-                        style={{ background: info.cor, color: info.texto, border: 'none', borderRadius: 6, padding: '8px 12px', fontSize: 12, fontWeight: 'bold', cursor: 'pointer' }}>
-                        {d} {info.label}
-                      </button>;
-                    })}
-                  </div>
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    <button onClick={aplicarPartial} style={btnEstilo('#1565c0')}>✔ Aplicar</button>
-                    <button onClick={() => setPicker(null)} style={btnEstilo('#ddd', '#555')}>Cancelar</button>
-                  </div>
-                </div>
-              )}
-
-              {picker === 'fin' && (
-                <div style={pickerEstilo('#0288d1')}>
-                  <div style={{ fontSize: 12, fontWeight: 'bold', color: '#0288d1', marginBottom: 8 }}>Em que dia o serviço foi finalizado?</div>
-                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
-                    {DIAS.map(d => (
-                      <button key={d} onClick={() => setFinDia(d)}
-                        style={{ background: finDia === d ? '#0288d1' : '#fff', color: finDia === d ? '#fff' : '#0288d1',
-                          border: '1.5px solid #0288d1', borderRadius: 6, padding: '8px 12px', fontSize: 12, fontWeight: 'bold', cursor: 'pointer' }}>
-                        {d}
-                      </button>
-                    ))}
-                  </div>
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    <button onClick={aplicarFin} style={btnEstilo('#0288d1')}>✔ Aplicar</button>
-                    <button onClick={() => setPicker(null)} style={btnEstilo('#ddd', '#555')}>Cancelar</button>
-                  </div>
-                </div>
-              )}
-
-              {picker === 'copy' && (
-                <div style={pickerEstilo('#6a1b9a')}>
-                  <div style={{ fontSize: 12, fontWeight: 'bold', color: '#6a1b9a', marginBottom: 8 }}>Copiar a aderência de qual item?</div>
-                  <select value={copySrcId} onChange={e => setCopySrcId(e.target.value)} style={{ ...inputEstilo, width: '100%', marginBottom: 10 }}>
-                    <option value="">— selecione —</option>
-                    {(todosItens || []).filter(i => i.id !== dados.id).map(i => (
-                      <option key={i.id} value={i.id}>ITEM {i.item} — {i.assunto}</option>
-                    ))}
-                  </select>
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    <button onClick={aplicarCopy} style={btnEstilo('#6a1b9a')}>✔ Aplicar</button>
-                    <button onClick={() => setPicker(null)} style={btnEstilo('#ddd', '#555')}>Cancelar</button>
-                  </div>
-                </div>
-              )}
-
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                {DIAS.map(d => {
-                  const st = (dados.aderencia_dias && dados.aderencia_dias[d] && dados.aderencia_dias[d].status) || '';
-                  const info = STATUS_INFO[st];
-                  const temObs = dados.aderencia_dias && dados.aderencia_dias[d] && dados.aderencia_dias[d].obs;
-                  return (
-                    <button key={d} onClick={() => alternarDia(d)}
-                      style={{ background: info.cor, color: info.texto, border: d === diaSelecionado ? '2.5px solid #333' : 'none', borderRadius: 8, padding: '10px 14px', fontSize: 13, fontWeight: 'bold', cursor: 'pointer', minWidth: 56 }}>
-                      {d}<br />{info.label}{temObs ? ' 📝' : ''}
-                    </button>
-                  );
-                })}
-              </div>
-
-              {diaSelecionado && (
-                <div style={{ marginTop: 16 }}>
-                  <label style={labelEstilo}>📝 Observação de {diaSelecionado}</label>
-                  <textarea
-                    value={(dados.aderencia_dias && dados.aderencia_dias[diaSelecionado] && dados.aderencia_dias[diaSelecionado].obs) || ''}
-                    onChange={e => atualizarObs(diaSelecionado, e.target.value)}
-                    rows={3} style={{ ...inputEstilo, width: '100%', resize: 'vertical' }} />
-                </div>
-              )}
-
-              <div style={{ marginTop: 20, paddingTop: 16, borderTop: '1px solid #eee' }}>
-                <label style={labelEstilo}>Progresso geral do item</label>
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
-                  {[['andamento', '↻ Em andamento'], ['concluido', '✔ Concluído'], ['niniciado', '○ Não iniciado']].map(([v, l]) => (
+              {/* Situação ao término da semana */}
+              <div style={secaoEstilo}>
+                <div style={secaoLabelEstilo}>📌 Situação ao término da semana</div>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  {[['andamento', '↻ Em andamento', '#f9a825'], ['niniciado', '○ Não iniciado', '#c62828'], ['concluido', '✔ Concluído', '#007a33']].map(([v, l, cor]) => (
                     <button key={v} onClick={() => setProgresso(v)}
-                      style={btnEstilo(dados.progresso === v ? '#007a33' : '#eee', dados.progresso === v ? '#fff' : '#555')}>
+                      style={btnEstilo(dados.progresso === v ? cor : '#eee', dados.progresso === v ? '#fff' : '#555')}>
                       {l}
                     </button>
                   ))}
                 </div>
                 {dados.progresso === 'niniciado' && (
-                  <div>
-                    <label style={labelEstilo}>Motivo de não ter iniciado</label>
+                  <div style={{ marginTop: 10 }}>
+                    <label style={labelEstilo}>📝 Motivo do não início</label>
                     <textarea value={dados.motivo_niniciado || ''} onChange={e => campo('motivo_niniciado', e.target.value)}
                       rows={2} style={{ ...inputEstilo, width: '100%', resize: 'vertical' }} />
                   </div>
                 )}
+              </div>
+
+              {/* Continuidade */}
+              <div style={secaoEstilo}>
+                <div style={secaoLabelEstilo}>🔁 Continuidade</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+                    <input type="checkbox" checked={!!dados.vem_da_semana}
+                      onChange={e => campo('vem_da_semana', e.target.checked)} />
+                    Vem da semana
+                  </label>
+                  <input type="text" placeholder="Nº" disabled={!dados.vem_da_semana}
+                    value={dados.semana_origem || ''} onChange={e => campo('semana_origem', e.target.value)}
+                    style={{ ...inputEstilo, width: 80, background: dados.vem_da_semana ? '#fff' : '#f0f0f0' }} />
+                </div>
+              </div>
+
+              {/* Execução por dia */}
+              <div style={secaoEstilo}>
+                <div style={secaoLabelEstilo}>📆 Execução por dia</div>
+
+                <div style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
+                  <button onClick={() => preencherSemana('ok')} style={btnEstilo('#007a33')}>✔ Semana executada</button>
+                  <button onClick={preencherSemanaNok} style={btnEstilo('#c62828')}>✘ Semana não executada</button>
+                  <button onClick={() => preencherSemana('semprog')} style={btnEstilo('#757575')}>🚫 Sem programação</button>
+                  <button onClick={abrirPartial} style={btnEstilo('#1565c0')}>📅 Semana parcial</button>
+                  <button onClick={() => { setFinDia(null); setPicker('fin'); }} style={btnEstilo('#0288d1')}>★ Finalizado em...</button>
+                  <button onClick={() => setPicker('copy')} style={btnEstilo('#6a1b9a')}>📋 Copiar de outro item</button>
+                </div>
+
+                {picker === 'partial' && (
+                  <div style={pickerEstilo('#1565c0')}>
+                    <div style={{ fontSize: 12, fontWeight: 'bold', color: '#1565c0', marginBottom: 8 }}>📅 Clique nos dias para alternar:</div>
+                    <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', fontSize: 10, color: '#666', marginBottom: 10 }}>
+                      {Object.entries(STATUS_INFO).filter(([k]) => k).map(([k, v]) => (
+                        <span key={k}><span style={{ display: 'inline-block', width: 7, height: 7, borderRadius: '50%', background: v.cor, marginRight: 3 }} />{v.label} {v.nome}</span>
+                      ))}
+                    </div>
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
+                      {DIAS.map(d => {
+                        const st = partialState[d] || '';
+                        const info = STATUS_INFO[st];
+                        return <button key={d} onClick={() => ciclarPartial(d)}
+                          style={{ background: info.cor, color: info.texto, border: 'none', borderRadius: 6, padding: '8px 12px', fontSize: 12, fontWeight: 'bold', cursor: 'pointer' }}>
+                          {d} {info.label}
+                        </button>;
+                      })}
+                    </div>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button onClick={aplicarPartial} style={btnEstilo('#1565c0')}>✔ Aplicar</button>
+                      <button onClick={() => setPicker(null)} style={btnEstilo('#eee', '#666')}>Cancelar</button>
+                    </div>
+                  </div>
+                )}
+
+                {picker === 'fin' && (
+                  <div style={pickerEstilo('#0288d1')}>
+                    <div style={{ fontSize: 12, fontWeight: 'bold', color: '#0288d1', marginBottom: 4 }}>★ Selecione o dia de conclusão do serviço</div>
+                    <div style={{ fontSize: 11, color: '#666', marginBottom: 10 }}>Os dias até a conclusão serão ✔ Executado, os posteriores serão ★ Sol. porém finalizado.</div>
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
+                      {DIAS.map(d => (
+                        <button key={d} onClick={() => setFinDia(d)}
+                          style={{ background: finDia === d ? '#0288d1' : '#fff', color: finDia === d ? '#fff' : '#0288d1',
+                            border: '1.5px solid #0288d1', borderRadius: 6, padding: '8px 12px', fontSize: 12, fontWeight: 'bold', cursor: 'pointer' }}>
+                          {d}
+                        </button>
+                      ))}
+                    </div>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button onClick={aplicarFin} style={btnEstilo('#0288d1')}>★ Aplicar</button>
+                      <button onClick={() => setPicker(null)} style={btnEstilo('#eee', '#666')}>Cancelar</button>
+                    </div>
+                  </div>
+                )}
+
+                {picker === 'copy' && (
+                  <div style={pickerEstilo('#6a1b9a')}>
+                    <div style={{ fontSize: 12, fontWeight: 'bold', color: '#6a1b9a', marginBottom: 8 }}>📋 Selecione o item modelo:</div>
+                    <select value={copySrcId} onChange={e => setCopySrcId(e.target.value)} style={{ ...inputEstilo, width: '100%', marginBottom: 10 }}>
+                      <option value="">— Selecione um item —</option>
+                      {(todosItens || []).filter(i => i.id !== dados.id && temAlgumDiaEm(i)).map(i => (
+                        <option key={i.id} value={i.id}>ITEM {i.item} | {i.assunto}</option>
+                      ))}
+                    </select>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button onClick={aplicarCopy} style={btnEstilo('#6a1b9a')}>✔ Copiar</button>
+                      <button onClick={() => setPicker(null)} style={btnEstilo('#eee', '#666')}>Cancelar</button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Grade de dias — clicar SELECIONA o dia (não cicla status) */}
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {DIAS.map(d => {
+                    const dd = (dados.aderencia_dias || {})[d] || {};
+                    const st = dd.status || '';
+                    const info = STATUS_INFO[st];
+                    const ativo = diaSelecionado === d;
+                    return (
+                      <button key={d} onClick={() => setDiaSelecionado(diaSelecionado === d ? null : d)}
+                        style={{
+                          background: ativo ? '#e8f5e9' : '#fff',
+                          border: ativo ? '2px solid #007a33' : '1.5px solid #ddd',
+                          borderRadius: 8, padding: '10px 14px', fontSize: 13, fontWeight: 'bold',
+                          cursor: 'pointer', color: '#333', minWidth: 62,
+                        }}>
+                        {d}
+                        {st && <span style={{ display: 'inline-block', width: 7, height: 7, borderRadius: '50%', background: info.cor, marginLeft: 4, verticalAlign: 'middle' }} />}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Painel do dia selecionado */}
+                {diaSelecionado && (() => {
+                  const dd = (dados.aderencia_dias || {})[diaSelecionado] || {};
+                  return (
+                    <div style={{ marginTop: 14, background: '#f7fbf7', border: '1px solid #cfe3d0', borderRadius: 10, padding: 14 }}>
+                      <div style={{ fontSize: 13, fontWeight: 'bold', color: '#007a33', marginBottom: 10 }}>{diaSelecionado} — Status</div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 12 }}>
+                        {[
+                          ['ok', '✔ Executado sem pendência', '#007a33'],
+                          ['pend', '⚠ Executado com pendência', '#e65100'],
+                          ['nok', '✘ Não executado', '#c62828'],
+                          ['semprog', '○ Sem programação', '#999'],
+                          ['fin', '★ Sol. porém finalizado', '#1565c0'],
+                        ].map(([v, l, cor]) => {
+                          const sel = dd.status === v;
+                          return (
+                            <div key={v} onClick={() => setStatusDia(diaSelecionado, v)}
+                              style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', padding: '7px 10px', borderRadius: 7,
+                                background: sel ? cor + '18' : '#fff', border: '1.5px solid ' + (sel ? cor : '#e0e0e0'),
+                                color: sel ? cor : '#555', fontWeight: sel ? 'bold' : 'normal', fontSize: 13 }}>
+                              <input type="radio" readOnly checked={sel} />
+                              {l}
+                            </div>
+                          );
+                        })}
+                      </div>
+
+                      {(dd.status === 'pend' || dd.status === 'nok') && (
+                        <div>
+                          <label style={labelEstilo}>📝 Observações</label>
+                          <textarea value={dd.obs || ''} onChange={e => atualizarCampoDia(diaSelecionado, 'obs', e.target.value)}
+                            rows={3} style={{ ...inputEstilo, width: '100%', resize: 'vertical' }} />
+                        </div>
+                      )}
+                      {dd.status === 'ok' && (
+                        <div>
+                          <label style={labelEstilo}>📝 Observações (opcional)</label>
+                          <textarea value={dd.obsOk || ''} placeholder="Registre uma nota sobre a execução deste dia (opcional)..."
+                            onChange={e => atualizarCampoDia(diaSelecionado, 'obsOk', e.target.value)}
+                            rows={2} style={{ ...inputEstilo, width: '100%', resize: 'vertical', background: '#f9fff9', borderColor: '#a5d6a7' }} />
+                          <label style={{ ...labelEstilo, marginTop: 8 }}>📅 Data de conclusão</label>
+                          <input type="text" placeholder="Ex: 23/06/2026" value={dd.concluidoDia || ''}
+                            onChange={e => atualizarCampoDia(diaSelecionado, 'concluidoDia', e.target.value)}
+                            style={{ ...inputEstilo, width: '100%' }} />
+                        </div>
+                      )}
+                      {dd.status === 'fin' && (
+                        <div>
+                          <label style={labelEstilo}>📝 Observações (opcional)</label>
+                          <textarea value={dd.obsOk || ''} placeholder="Nota sobre o serviço finalizado antecipadamente..."
+                            onChange={e => atualizarCampoDia(diaSelecionado, 'obsOk', e.target.value)}
+                            rows={2} style={{ ...inputEstilo, width: '100%', resize: 'vertical', background: '#e3f2fd', borderColor: '#90caf9' }} />
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
             </div>
           )}
@@ -396,6 +498,8 @@ const inputEstilo = { padding: '8px 10px', borderRadius: 7, border: '1px solid #
 function btnEstilo(cor, texto) {
   return { background: cor, color: texto || '#fff', border: 'none', borderRadius: 7, padding: '8px 14px', fontSize: 12, fontWeight: 'bold', cursor: 'pointer' };
 }
+const secaoEstilo = { background: '#fafcfa', border: '1px solid #e0eae0', borderRadius: 10, padding: 14, marginBottom: 14 };
+const secaoLabelEstilo = { fontSize: 12, fontWeight: 'bold', color: '#007a33', marginBottom: 10, textTransform: 'uppercase', letterSpacing: .3 };
 function pickerEstilo(cor) {
   return { background: '#f7fbf7', border: '2px solid ' + cor, borderRadius: 12, padding: 14, marginBottom: 16 };
 }
