@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { supabase } from '../lib/supabase';
 
 const DIAS = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom'];
 const STATUS_CICLO = ['', 'ok', 'pend', 'nok', 'fin', 'semprog'];
@@ -15,8 +16,33 @@ export default function ItemModal({ item, onClose, onSave, onDelete }) {
   const [aba, setAba] = useState('dados');
   const [dados, setDados] = useState(item);
   const [novaTag, setNovaTag] = useState('');
+  const [historicoTags, setHistoricoTags] = useState([]);
 
   useEffect(() => { setDados(item); }, [item]);
+  useEffect(() => {
+    if (item.draft) buscarHistoricoTags();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [item.draft]);
+
+  async function buscarHistoricoTags() {
+    const { data } = await supabase.from('itens').select('tags').eq('draft', item.draft).neq('id', item.id);
+    const todas = [];
+    (data || []).forEach(it => (it.tags || []).forEach(t => todas.push(t)));
+    setHistoricoTags(todas);
+  }
+
+  // Duas TAGs são "a mesma coisa" quando uma é a base/prefixo da outra
+  // (ex: 6"-AQ-5123-1263 e 6"-AQ-5123-1263-Mb-NI)
+  function tagsSaoEquivalentes(a, b) {
+    const na = String(a || '').trim().toLowerCase().replace(/\s+/g, '');
+    const nb = String(b || '').trim().toLowerCase().replace(/\s+/g, '');
+    if (!na || !nb) return false;
+    if (na === nb) return true;
+    return na.startsWith(nb) || nb.startsWith(na);
+  }
+  function tagEhRepetida(t) {
+    return historicoTags.some(ht => tagsSaoEquivalentes(ht, t));
+  }
 
   function campo(chave, valor) {
     setDados(prev => ({ ...prev, [chave]: valor }));
@@ -105,6 +131,9 @@ export default function ItemModal({ item, onClose, onSave, onDelete }) {
 
           {aba === 'tags' && (
             <div>
+              <div style={{ fontSize: 11, color: '#666', marginBottom: 10 }}>
+                🟢 verde = nova (não apareceu antes neste Draft) · 🔴 vermelho = repetida (já apareceu em outra semana)
+              </div>
               <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
                 <input value={novaTag} onChange={e => setNovaTag(e.target.value)}
                   onKeyDown={e => { if (e.key === 'Enter') adicionarTag(); }}
@@ -112,16 +141,24 @@ export default function ItemModal({ item, onClose, onSave, onDelete }) {
                 <button onClick={adicionarTag} style={btnEstilo('#007a33')}>+ Adicionar</button>
               </div>
               {(dados.tags || []).length === 0 && <div style={{ color: '#999', fontSize: 13 }}>Nenhuma TAG cadastrada.</div>}
-              {(dados.tags || []).map(t => (
-                <div key={t} style={{ background: '#f7fbf7', border: '1px solid #cfe3d0', borderRadius: 8, padding: 10, marginBottom: 8 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                    <b style={{ fontSize: 13 }}>{t}</b>
-                    <span onClick={() => removerTag(t)} style={{ cursor: 'pointer', color: '#c0392b', fontSize: 13 }}>🗑</span>
+              {(dados.tags || []).map(t => {
+                const repetida = tagEhRepetida(t);
+                return (
+                  <div key={t} style={{ background: repetida ? '#fdeaea' : '#e8f7ea', border: '1.5px solid ' + (repetida ? '#e53935' : '#2e9e44'), borderRadius: 8, padding: 10, marginBottom: 8 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                      <span>
+                        <b style={{ fontSize: 13 }}>{t}</b>
+                        {repetida
+                          ? <span style={{ color: '#e53935', fontSize: 11, marginLeft: 8, fontWeight: 'bold' }}>🔴 repetida ✔</span>
+                          : <span style={{ color: '#2e9e44', fontSize: 11, marginLeft: 8, fontWeight: 'bold' }}>🟢 nova</span>}
+                      </span>
+                      <span onClick={() => removerTag(t)} style={{ cursor: 'pointer', color: '#c0392b', fontSize: 13 }}>🗑</span>
+                    </div>
+                    <input placeholder="Situação desta TAG..." value={(dados.tags_situacoes || {})[t.trim().toLowerCase()] || ''}
+                      onChange={e => situacaoTag(t, e.target.value)} style={{ ...inputEstilo, width: '100%' }} />
                   </div>
-                  <input placeholder="Situação desta TAG..." value={(dados.tags_situacoes || {})[t.trim().toLowerCase()] || ''}
-                    onChange={e => situacaoTag(t, e.target.value)} style={{ ...inputEstilo, width: '100%' }} />
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
 

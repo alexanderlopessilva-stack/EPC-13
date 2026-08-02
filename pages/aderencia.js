@@ -2,6 +2,8 @@ import { useEffect, useState, useMemo } from 'react';
 import Link from 'next/link';
 import { supabase } from '../lib/supabase';
 import ItemModal from '../components/ItemModal';
+import PTDrawer from '../components/PTDrawer';
+import RelatorioHistorico from '../components/RelatorioHistorico';
 
 const DIAS = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom'];
 const STATUS_CICLO = ['', 'ok', 'pend', 'nok', 'fin', 'semprog'];
@@ -27,6 +29,8 @@ export default function Aderencia() {
   const [pendentesDia, setPendentesDia] = useState('');
   const [itemAberto, setItemAberto] = useState(null);
   const [novoItem, setNovoItem] = useState({ item: '', assunto: '', draft: '', disciplina: '', responsavel: '' });
+  const [ptAberto, setPtAberto] = useState(false);
+  const [relatorioAberto, setRelatorioAberto] = useState(false);
 
   useEffect(() => { carregarSemanas(); }, []);
   useEffect(() => { if (semanaAtivaId) carregarItens(semanaAtivaId); }, [semanaAtivaId]);
@@ -175,6 +179,56 @@ export default function Aderencia() {
       + totalSemanasAtualizadas + ' semana(s) existente(s) substituída(s)\n'
       + totalItensCriados + ' item(ns) importado(s) no total'
       + (semanasPuladas.length ? '\n\n⚠️ Semana(s) que você optou por não substituir: ' + semanasPuladas.join(', ') : ''));
+    e.target.value = '';
+  }
+
+  async function importarExcel(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    const XLSX = await import('xlsx');
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, { type: 'array' });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const linhas = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: '' });
+
+    // acha a linha de cabeçalho (a que tem "item" na primeira coluna que não esteja vazia)
+    let headerIdx = 0;
+    for (let i = 0; i < Math.min(linhas.length, 10); i++) {
+      const c0 = String((linhas[i] || [])[0] || '').trim().toLowerCase();
+      if (c0 === 'item') { headerIdx = i; break; }
+    }
+    const dadosLinhas = linhas.slice(headerIdx + 1).filter(l => l && l.some(c => String(c || '').trim() !== ''));
+
+    if (dadosLinhas.length === 0) { alert('Não encontrei nenhuma linha de dados nessa planilha.'); e.target.value = ''; return; }
+
+    const semanaAlvo = semanaAtiva;
+    if (!semanaAlvo) { alert('Selecione ou crie uma semana antes de importar.'); e.target.value = ''; return; }
+    if (!confirm('Importar ' + dadosLinhas.length + ' linha(s) para a Semana ' + semanaAlvo.numero + '?')) { e.target.value = ''; return; }
+
+    const registros = dadosLinhas.map(raw => {
+      const tagsTexto = String(raw[4] || '');
+      const tags = tagsTexto.split(/\n|;/).map(t => t.trim()).filter(Boolean);
+      return {
+        semana_id: semanaAlvo.id,
+        item: raw[0] || '', assunto: raw[1] || '', unidade: raw[2] || '', area: raw[3] || '',
+        draft: raw[5] || '', pt: raw[6] || '', atividade: raw[7] || '',
+        disciplina: raw[12] || '', responsavel: raw[13] || '',
+        requisitante1: raw[14] || '', matricula1: raw[15] || '',
+        tags, tags_situacoes: {}, aderencia_dias: {}, emissao_pt: {},
+      };
+    });
+
+    let totalImportado = 0;
+    for (let i = 0; i < registros.length; i += 50) {
+      const lote = registros.slice(i, i + 50);
+      const { error } = await supabase.from('itens').insert(lote);
+      if (error) alert('Erro ao importar linhas: ' + error.message);
+      else totalImportado += lote.length;
+    }
+
+    carregarItens(semanaAtivaId);
+    setMenuAberto(false);
+    alert('✅ ' + totalImportado + ' item(ns) importado(s) da planilha para a Semana ' + semanaAlvo.numero + '.');
     e.target.value = '';
   }
 
@@ -330,9 +384,16 @@ export default function Aderencia() {
                 📥 Importar JSON (sessão antiga)
                 <input type="file" accept=".json" onChange={importarJSON} style={{ display: 'none' }} />
               </label>
+              <label style={{ ...btnEstilo('#fff3e0', '#8a4b00'), textAlign: 'left', cursor: 'pointer', display: 'block', border: '1.5px dashed #ffb74d' }}>
+                📥 Importar Excel (planilha)
+                <input type="file" accept=".xlsx,.xls,.csv" onChange={importarExcel} style={{ display: 'none' }} />
+              </label>
               <button onClick={exportarExcel} style={{ ...btnEstilo('#e8f5e9', '#005a27'), textAlign: 'left' }}>📊 Exportar Excel</button>
+              <div style={{ fontSize: 11, fontWeight: 'bold', color: '#007a33', textTransform: 'uppercase', marginTop: 10, paddingTop: 8, borderTop: '1px solid #ddd' }}>Relatórios</div>
+              <button onClick={() => { setRelatorioAberto(true); setMenuAberto(false); }} style={{ ...btnEstilo('#e8f5e9', '#005a27'), textAlign: 'left' }}>📈 Relatório & Histórico</button>
+              <button onClick={() => { setPtAberto(true); setMenuAberto(false); }} style={{ ...btnEstilo('#e8f5e9', '#005a27'), textAlign: 'left' }}>📄 Emissão de PT</button>
               <div style={{ fontSize: 11, color: '#999', marginTop: 10, padding: '10px 4px 0', borderTop: '1px solid #ddd' }}>
-                Relatório, Histórico, Importar Itens e Situação de TAGs chegam na próxima atualização.
+                Atualizar Situações das TAGs por Excel chega na próxima atualização.
               </div>
             </div>
           </div>
@@ -342,6 +403,11 @@ export default function Aderencia() {
       {itemAberto && (
         <ItemModal item={itemAberto} onClose={() => setItemAberto(null)} onSave={salvarItem} onDelete={excluirItem} />
       )}
+
+      <PTDrawer aberto={ptAberto} onClose={() => setPtAberto(false)} itens={itensFiltrados} onAtualizado={() => carregarItens(semanaAtivaId)} />
+
+      <RelatorioHistorico aberto={relatorioAberto} onClose={() => setRelatorioAberto(false)}
+        semanas={semanas} itensSemanaAtual={itens} semanaAtivaNumero={semanaAtiva ? semanaAtiva.numero : ''} />
     </div>
   );
 }
