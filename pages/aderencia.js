@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabase';
 import ItemModal from '../components/ItemModal';
 import PTDrawer from '../components/PTDrawer';
 import RelatorioHistorico from '../components/RelatorioHistorico';
+import AtualizacaoDiffModal from '../components/AtualizacaoDiffModal';
 
 const DIAS = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom'];
 const STATUS_CICLO = ['', 'ok', 'pend', 'nok', 'fin', 'semprog'];
@@ -29,6 +30,7 @@ export default function Aderencia() {
   const [pendentesDia, setPendentesDia] = useState('');
   const [itemAberto, setItemAberto] = useState(null);
   const [avisoBusca, setAvisoBusca] = useState(null); // null | 'nenhuma' | ['31','35',...]
+  const [diffAtualizacao, setDiffAtualizacao] = useState(null);
   const [novoItem, setNovoItem] = useState({ item: '', assunto: '', draft: '', disciplina: '', responsavel: '' });
   const [ptAberto, setPtAberto] = useState(false);
   const [relatorioAberto, setRelatorioAberto] = useState(false);
@@ -180,6 +182,195 @@ export default function Aderencia() {
       + totalSemanasAtualizadas + ' semana(s) existente(s) substituída(s)\n'
       + totalItensCriados + ' item(ns) importado(s) no total'
       + (semanasPuladas.length ? '\n\n⚠️ Semana(s) que você optou por não substituir: ' + semanasPuladas.join(', ') : ''));
+    e.target.value = '';
+  }
+
+  async function adicionarSemanaAnterior(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    const num = window.prompt('🗂️ Número da semana ANTERIOR que deseja adicionar ao histórico:\n\nIsso só registra os dados dessa semana para consulta e comparação de TAGs/Drafts — não muda qual é a semana atual do sistema.', '');
+    if (!num || !num.trim()) { e.target.value = ''; return; }
+    const numero = num.trim();
+    const existente = semanas.find(s => s.numero === numero);
+    if (existente && !confirm('A semana ' + numero + ' já existe no histórico.\nDeseja sobrescrever os dados dela?')) { e.target.value = ''; return; }
+
+    const XLSX = await import('xlsx');
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, { type: 'array' });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const linhas = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: '' });
+    let headerIdx = 0;
+    for (let i = 0; i < Math.min(linhas.length, 10); i++) {
+      const c0 = String((linhas[i] || [])[0] || '').trim().toLowerCase();
+      if (c0 === 'item') { headerIdx = i; break; }
+    }
+    const dadosLinhas = linhas.slice(headerIdx + 1).filter(l => l && l.some(c => String(c || '').trim() !== ''));
+
+    let semanaId;
+    if (existente) {
+      semanaId = existente.id;
+      await supabase.from('itens').delete().eq('semana_id', semanaId);
+    } else {
+      const { data: nova, error } = await supabase.from('semanas').insert({ numero }).select().single();
+      if (error) { alert('Erro: ' + error.message); e.target.value = ''; return; }
+      semanaId = nova.id;
+    }
+
+    const registros = dadosLinhas.map(raw => {
+      const tags = String(raw[4] || '').split(/\n|;/).map(t => t.trim()).filter(Boolean);
+      return {
+        semana_id: semanaId,
+        item: raw[0] || '', assunto: raw[1] || '', unidade: raw[2] || '', area: raw[3] || '',
+        draft: raw[5] || '', pt: raw[6] || '', atividade: raw[7] || '',
+        disciplina: raw[12] || '', responsavel: raw[13] || '',
+        requisitante1: raw[14] || '', matricula1: raw[15] || '',
+        tags, tags_situacoes: {}, aderencia_dias: {}, emissao_pt: {},
+      };
+    });
+    for (let i = 0; i < registros.length; i += 50) await supabase.from('itens').insert(registros.slice(i, i + 50));
+
+    await carregarSemanas();
+    setSemanaAtivaId(semanaId);
+    setMenuAberto(false);
+    alert('✅ Semana ' + numero + ' adicionada ao histórico com ' + registros.length + ' item(ns)!\n\nEssa semana é só de referência, pra consulta e comparação de TAGs/Drafts.');
+    e.target.value = '';
+  }
+
+  async function processarAtualizarSemanaAtual(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    if (!semanaAtiva) { alert('Nenhuma semana ativa.'); e.target.value = ''; return; }
+
+    const XLSX = await import('xlsx');
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, { type: 'array' });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const linhas = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: '' });
+    let headerIdx = 0;
+    for (let i = 0; i < Math.min(linhas.length, 10); i++) {
+      const c0 = String((linhas[i] || [])[0] || '').trim().toLowerCase();
+      if (c0 === 'item') { headerIdx = i; break; }
+    }
+    const dadosLinhas = linhas.slice(headerIdx + 1).filter(l => l && l.some(c => String(c || '').trim() !== ''));
+
+    const porItem = {};
+    itens.forEach(it => { if (it.item && !(it.item in porItem)) porItem[it.item] = it; });
+
+    const CAMPOS = [
+      { chave: 'assunto', idx: 1, label: 'Assunto' }, { chave: 'unidade', idx: 2, label: 'Unidade' },
+      { chave: 'area', idx: 3, label: 'Área' }, { chave: 'draft', idx: 5, label: 'Draft' }, { chave: 'pt', idx: 6, label: 'PT' },
+      { chave: 'disciplina', idx: 12, label: 'Disciplina' }, { chave: 'responsavel', idx: 13, label: 'Responsável' },
+      { chave: 'requisitante1', idx: 14, label: 'Requisitante' }, { chave: 'matricula1', idx: 15, label: 'Matrícula' },
+    ];
+
+    const atualizacoes = [], novos = [];
+    dadosLinhas.forEach(raw => {
+      const itemNovo = String(raw[0] || '').trim();
+      if (!itemNovo) return;
+      const tagsNovas = String(raw[4] || '').split(/\n|;/).map(t => t.trim()).filter(Boolean);
+      if (porItem[itemNovo]) {
+        const it = porItem[itemNovo];
+        const mudancas = [];
+        CAMPOS.forEach(c => {
+          const atual = String(it[c.chave] || '').trim();
+          const novo = String(raw[c.idx] || '').trim();
+          if (novo && novo !== atual) mudancas.push({ chave: c.chave, label: c.label, de: atual, para: novo });
+        });
+        const tagsAtuais = (it.tags || []).map(t => t.trim());
+        const tagsMudaram = JSON.stringify([...tagsAtuais].sort()) !== JSON.stringify([...tagsNovas].sort());
+        if (mudancas.length || tagsMudaram) atualizacoes.push({ id: it.id, item: itemNovo, assuntoAtual: it.assunto, mudancas, tagsAtuais, tagsNovas, tagsMudaram });
+      } else {
+        novos.push({ item: itemNovo, assunto: raw[1] || '', raw, tags: tagsNovas });
+      }
+    });
+
+    if (!atualizacoes.length && !novos.length) {
+      alert('✅ Nenhuma diferença encontrada — a semana ' + semanaAtiva.numero + ' já parece estar atualizada.');
+      e.target.value = ''; return;
+    }
+    setDiffAtualizacao({ atualizacoes, novos });
+    e.target.value = '';
+  }
+
+  async function aplicarDiffAtualizacao(atualizacoesEscolhidas, novosEscolhidos) {
+    for (const u of atualizacoesEscolhidas) {
+      const patch = {};
+      u.mudancas.forEach(m => { patch[m.chave] = m.para; });
+      if (u.tagsMudaram) patch.tags = u.tagsNovas;
+      await supabase.from('itens').update(patch).eq('id', u.id);
+    }
+    for (const n of novosEscolhidos) {
+      await supabase.from('itens').insert({
+        semana_id: semanaAtivaId, item: n.item, assunto: n.assunto, unidade: n.raw[2] || '', area: n.raw[3] || '',
+        draft: n.raw[5] || '', pt: n.raw[6] || '', atividade: n.raw[7] || '',
+        disciplina: n.raw[12] || '', responsavel: n.raw[13] || '',
+        requisitante1: n.raw[14] || '', matricula1: n.raw[15] || '',
+        tags: n.tags, tags_situacoes: {}, aderencia_dias: {}, emissao_pt: {},
+      });
+    }
+    setDiffAtualizacao(null);
+    setMenuAberto(false);
+    carregarItens(semanaAtivaId);
+    alert('✅ Semana atualizada! ' + atualizacoesEscolhidas.length + ' item(ns) alterado(s), ' + novosEscolhidos.length + ' novo(s) adicionado(s).');
+  }
+
+  async function processarAtualizarSituacoesTags(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    const XLSX = await import('xlsx');
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, { type: 'array' });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: '' });
+
+    function tagsEquivalentes(a, b) {
+      const na = String(a || '').trim().toLowerCase().replace(/\s+/g, '');
+      const nb = String(b || '').trim().toLowerCase().replace(/\s+/g, '');
+      if (!na || !nb) return false;
+      if (na === nb) return true;
+      return na.startsWith(nb) || nb.startsWith(na);
+    }
+
+    const grupos = [];
+    for (let i = 1; i < rows.length; i++) {
+      const tag = String((rows[i] || [])[0] || '').trim();
+      const status = String((rows[i] || [])[5] || '').trim();
+      if (!tag || !status) continue;
+      let grupo = grupos.find(g => g.labels.some(l => tagsEquivalentes(l, tag)));
+      if (!grupo) { grupo = { labels: [], statusList: [] }; grupos.push(grupo); }
+      if (!grupo.labels.includes(tag)) grupo.labels.push(tag);
+      if (!grupo.statusList.includes(status)) grupo.statusList.push(status);
+    }
+    if (!grupos.length) { alert('Nenhuma TAG com status encontrada.\nConfira se a TAG está na coluna A e o status na coluna F.'); e.target.value = ''; return; }
+
+    const CONFLITO_TXT = 'Status em conflito, conferir planilha';
+    const resolvidos = grupos.map(g => ({ labels: g.labels, status: g.statusList.length > 1 ? CONFLITO_TXT : g.statusList[0] }));
+
+    const idxAtiva = semanas.findIndex(s => s.id === semanaAtivaId);
+    const semanaAnterior = idxAtiva > 0 ? semanas[idxAtiva - 1] : null;
+    const semanasAlvo = [semanaAtiva].concat(semanaAnterior ? [semanaAnterior] : []);
+
+    let totalAtualizadas = 0, totalConflitos = 0;
+    for (const s of semanasAlvo) {
+      const { data } = await supabase.from('itens').select('id, tags, tags_situacoes').eq('semana_id', s.id);
+      for (const it of (data || [])) {
+        const situacoesAtuais = { ...(it.tags_situacoes || {}) };
+        let mudou = false;
+        (it.tags || []).forEach(t => {
+          const grupo = resolvidos.find(g => g.labels.some(l => tagsEquivalentes(l, t)));
+          if (grupo) {
+            situacoesAtuais[t.trim().toLowerCase()] = grupo.status;
+            mudou = true; totalAtualizadas++;
+            if (grupo.status === CONFLITO_TXT) totalConflitos++;
+          }
+        });
+        if (mudou) await supabase.from('itens').update({ tags_situacoes: situacoesAtuais }).eq('id', it.id);
+      }
+    }
+    carregarItens(semanaAtivaId);
+    setMenuAberto(false);
+    alert('✅ Situações de TAGs atualizadas!\n\n' + totalAtualizadas + ' TAG(s) marcadas\nSemanas afetadas: ' + semanasAlvo.map(s => s.numero).join(', ') + '.'
+      + (totalConflitos ? '\n\n⚠️ ' + totalConflitos + ' TAG(s) com status em conflito.' : ''));
     e.target.value = '';
   }
 
@@ -421,19 +612,28 @@ export default function Aderencia() {
             <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 8 }}>
               <button onClick={criarSemana} style={{ ...btnEstilo('#e8f5e9', '#005a27'), textAlign: 'left' }}>🗓️ Nova Semana</button>
               <label style={{ ...btnEstilo('#fff3e0', '#8a4b00'), textAlign: 'left', cursor: 'pointer', display: 'block', border: '1.5px dashed #ffb74d' }}>
+                🗂️ Adicionar Semana Anterior
+                <input type="file" accept=".xlsx,.xls,.csv" onChange={adicionarSemanaAnterior} style={{ display: 'none' }} />
+              </label>
+              <label style={{ ...btnEstilo('#fff3e0', '#8a4b00'), textAlign: 'left', cursor: 'pointer', display: 'block', border: '1.5px dashed #ffb74d' }}>
+                🔄 Atualizar Semana Atual
+                <input type="file" accept=".xlsx,.xls,.csv" onChange={processarAtualizarSemanaAtual} style={{ display: 'none' }} />
+              </label>
+              <label style={{ ...btnEstilo('#fff3e0', '#8a4b00'), textAlign: 'left', cursor: 'pointer', display: 'block', border: '1.5px dashed #ffb74d' }}>
+                🏷️ Atualizar Situações das TAGs
+                <input type="file" accept=".xlsx,.xls,.csv" onChange={processarAtualizarSituacoesTags} style={{ display: 'none' }} />
+              </label>
+              <label style={{ ...btnEstilo('#fff3e0', '#8a4b00'), textAlign: 'left', cursor: 'pointer', display: 'block', border: '1.5px dashed #ffb74d' }}>
                 📥 Importar JSON (sessão antiga)
                 <input type="file" accept=".json" onChange={importarJSON} style={{ display: 'none' }} />
               </label>
               <label style={{ ...btnEstilo('#fff3e0', '#8a4b00'), textAlign: 'left', cursor: 'pointer', display: 'block', border: '1.5px dashed #ffb74d' }}>
-                📥 Importar Excel (planilha)
+                📥 Importar Excel (planilha, semana nova)
                 <input type="file" accept=".xlsx,.xls,.csv" onChange={importarExcel} style={{ display: 'none' }} />
               </label>
               <button onClick={exportarExcel} style={{ ...btnEstilo('#e8f5e9', '#005a27'), textAlign: 'left' }}>📊 Exportar Excel</button>
               <div style={{ fontSize: 11, fontWeight: 'bold', color: '#007a33', textTransform: 'uppercase', marginTop: 10, paddingTop: 8, borderTop: '1px solid #ddd' }}>Relatórios</div>
               <button onClick={() => { setRelatorioAberto(true); setMenuAberto(false); }} style={{ ...btnEstilo('#e8f5e9', '#005a27'), textAlign: 'left' }}>📈 Relatório & Histórico</button>
-              <div style={{ fontSize: 11, color: '#999', marginTop: 10, padding: '10px 4px 0', borderTop: '1px solid #ddd' }}>
-                Atualizar Situações das TAGs por Excel chega na próxima atualização.
-              </div>
             </div>
           </div>
         </div>
@@ -455,6 +655,8 @@ export default function Aderencia() {
 
       <RelatorioHistorico aberto={relatorioAberto} onClose={() => setRelatorioAberto(false)}
         semanas={semanas} itensSemanaAtual={itens} semanaAtivaNumero={semanaAtiva ? semanaAtiva.numero : ''} />
+
+      <AtualizacaoDiffModal diff={diffAtualizacao} onCancelar={() => setDiffAtualizacao(null)} onAplicar={aplicarDiffAtualizacao} />
     </div>
   );
 }

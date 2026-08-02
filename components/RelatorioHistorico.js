@@ -57,6 +57,19 @@ export default function RelatorioHistorico({ aberto, onClose, semanas, itensSema
     .map(([k, v]) => ({ name: LABEL_STATUS[k], value: v, cor: CORES_STATUS[k] }))
     .filter(d => d.value > 0);
 
+  const pendenciasComObs = useMemo(() => {
+    const lista = [];
+    itensSemanaAtual.forEach(it => {
+      const dias = it.aderencia_dias || {};
+      Object.entries(dias).forEach(([dia, info]) => {
+        if (info && (info.status === 'pend' || info.status === 'nok') && info.obs && info.obs.trim()) {
+          lista.push({ item: it.item, draft: it.draft, assunto: it.assunto, dia, status: info.status, obs: info.obs });
+        }
+      });
+    });
+    return lista;
+  }, [itensSemanaAtual]);
+
   const historicoFiltrado = dadosHistorico.filter(d => semanasSelecionadas[d.numero]);
 
   if (!aberto) return null;
@@ -96,6 +109,23 @@ export default function RelatorioHistorico({ aberto, onClose, semanas, itensSema
                   </PieChart>
                 </ResponsiveContainer>
               ) : <div style={{ textAlign: 'center', color: '#999', padding: 30 }}>Nenhum status marcado ainda nesta semana.</div>}
+
+              {pendenciasComObs.length > 0 && (
+                <div style={{ marginTop: 24 }}>
+                  <div style={{ fontSize: 13, fontWeight: 'bold', color: '#c0392b', marginBottom: 10 }}>
+                    📝 Pendências com observação ({pendenciasComObs.length})
+                  </div>
+                  {pendenciasComObs.map((p, i) => (
+                    <div key={i} style={{ background: p.status === 'nok' ? '#fdecea' : '#fff8e1', border: '1px solid ' + (p.status === 'nok' ? '#f0c0c0' : '#ffe0a0'), borderRadius: 8, padding: '10px 14px', marginBottom: 8 }}>
+                      <div style={{ fontSize: 12, fontWeight: 'bold' }}>
+                        ITEM {p.item} | DRAFT {p.draft || '-'} — {p.dia} ({p.status === 'nok' ? '✘ Não executado' : '⚠ Pendente'})
+                      </div>
+                      <div style={{ fontSize: 12, color: '#555', marginTop: 2 }}>{p.assunto}</div>
+                      <div style={{ fontSize: 12, color: '#333', marginTop: 4 }}>📝 {p.obs}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 

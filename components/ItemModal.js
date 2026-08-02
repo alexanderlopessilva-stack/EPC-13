@@ -17,6 +17,7 @@ export default function ItemModal({ item, onClose, onSave, onDelete }) {
   const [dados, setDados] = useState(item);
   const [novaTag, setNovaTag] = useState('');
   const [historicoTags, setHistoricoTags] = useState([]);
+  const [diaSelecionado, setDiaSelecionado] = useState(null);
 
   useEffect(() => { setDados(item); }, [item]);
   useEffect(() => {
@@ -53,6 +54,11 @@ export default function ItemModal({ item, onClose, onSave, onDelete }) {
     const statusAtual = (diasAtual[dia] && diasAtual[dia].status) || '';
     const proximoIdx = (STATUS_CICLO.indexOf(statusAtual) + 1) % STATUS_CICLO.length;
     campo('aderencia_dias', { ...diasAtual, [dia]: { ...(diasAtual[dia] || {}), status: STATUS_CICLO[proximoIdx] } });
+    setDiaSelecionado(dia);
+  }
+  function atualizarObs(dia, texto) {
+    const diasAtual = dados.aderencia_dias || {};
+    campo('aderencia_dias', { ...diasAtual, [dia]: { ...(diasAtual[dia] || {}), obs: texto } });
   }
 
   function preencherSemana(status) {
@@ -175,12 +181,21 @@ export default function ItemModal({ item, onClose, onSave, onDelete }) {
                   const info = STATUS_INFO[st];
                   return (
                     <button key={d} onClick={() => alternarDia(d)}
-                      style={{ background: info.cor, color: info.texto, border: 'none', borderRadius: 8, padding: '10px 14px', fontSize: 13, fontWeight: 'bold', cursor: 'pointer', minWidth: 56 }}>
+                      style={{ background: info.cor, color: info.texto, border: d === diaSelecionado ? '2.5px solid #333' : 'none', borderRadius: 8, padding: '10px 14px', fontSize: 13, fontWeight: 'bold', cursor: 'pointer', minWidth: 56 }}>
                       {d}<br />{info.label}
                     </button>
                   );
                 })}
               </div>
+              {diaSelecionado && (
+                <div style={{ marginTop: 16 }}>
+                  <label style={labelEstilo}>📝 Observação de {diaSelecionado}</label>
+                  <textarea
+                    value={(dados.aderencia_dias && dados.aderencia_dias[diaSelecionado] && dados.aderencia_dias[diaSelecionado].obs) || ''}
+                    onChange={e => atualizarObs(diaSelecionado, e.target.value)}
+                    rows={3} style={{ ...inputEstilo, width: '100%', resize: 'vertical' }} />
+                </div>
+              )}
             </div>
           )}
 
