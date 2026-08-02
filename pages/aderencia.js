@@ -94,6 +94,70 @@ export default function Aderencia() {
     carregarItens(semanaAtivaId);
   }
 
+  async function importarJSON(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    const texto = await file.text();
+    let data;
+    try { data = JSON.parse(texto); } catch (err) { alert('Arquivo JSON inválido: ' + err.message); e.target.value = ''; return; }
+    if (!data.historico) { alert('Esse arquivo não parece ser uma sessão de Aderência válida (não encontrei "historico").'); e.target.value = ''; return; }
+
+    const numerosExistentes = new Set(semanas.map(s => s.numero));
+    let totalSemanasCriadas = 0, totalItensCriados = 0;
+    const semanasPuladas = [];
+
+    for (const [numero, semanaObj] of Object.entries(data.historico)) {
+      if (numerosExistentes.has(numero)) { semanasPuladas.push(numero); continue; }
+
+      const { data: novaSemana, error: errSemana } = await supabase.from('semanas').insert({
+        numero,
+        periodo_inicio: semanaObj.periodoInicio || null,
+        periodo_fim: semanaObj.periodoFim || null,
+      }).select().single();
+      if (errSemana) { alert('Erro ao criar semana ' + numero + ': ' + errSemana.message); continue; }
+      totalSemanasCriadas++;
+
+      const linhas = (semanaObj.records || []).map(rec => {
+        const raw = rec.raw || [];
+        let devExec = null;
+        if (rec.devolutiva && rec.devolutiva.executavel !== undefined && rec.devolutiva.executavel !== null) {
+          devExec = rec.devolutiva.executavel === true ? 'sim' : rec.devolutiva.executavel === false ? 'nao' : rec.devolutiva.executavel;
+        }
+        return {
+          semana_id: novaSemana.id,
+          item: raw[0] || '', assunto: raw[1] || '', unidade: raw[2] || '', area: raw[3] || '',
+          draft: raw[5] || '', pt: raw[6] || '', atividade: raw[7] || '',
+          disciplina: raw[12] || '', responsavel: raw[13] || '',
+          requisitante1: raw[14] || '', matricula1: raw[15] || '',
+          tags: rec.tags || [],
+          tags_situacoes: rec.tagsSituacoes || {},
+          aderencia_dias: (rec.aderencia && rec.aderencia.dias) || {},
+          progresso: (rec.aderencia && rec.aderencia.progresso) || '',
+          motivo_niniciado: (rec.aderencia && rec.aderencia.motivoNIniciado) || '',
+          devolutiva_texto: (rec.devolutiva && rec.devolutiva.texto) || '',
+          devolutiva_executavel: devExec,
+          fora_programacao: rec.foraProg || false,
+          semana_origem: rec.semanaOrigem || null,
+          emissao_pt: {},
+        };
+      });
+
+      // insere em lotes de 50, pra não estourar o tamanho da requisição
+      for (let i = 0; i < linhas.length; i += 50) {
+        const lote = linhas.slice(i, i + 50);
+        const { error: errItens } = await supabase.from('itens').insert(lote);
+        if (errItens) alert('Erro ao importar itens da semana ' + numero + ': ' + errItens.message);
+        else totalItensCriados += lote.length;
+      }
+    }
+
+    await carregarSemanas();
+    setMenuAberto(false);
+    alert('✅ Importação concluída!\n\n' + totalSemanasCriadas + ' semana(s) criada(s)\n' + totalItensCriados + ' item(ns) importado(s)'
+      + (semanasPuladas.length ? '\n\n⚠️ Semana(s) já existente(s) no banco, puladas pra evitar duplicar: ' + semanasPuladas.join(', ') : ''));
+    e.target.value = '';
+  }
+
   async function exportarExcel() {
     const XLSX = await import('xlsx');
     const linhas = itensFiltrados.map(it => ({
@@ -242,6 +306,10 @@ export default function Aderencia() {
             </div>
             <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 8 }}>
               <button onClick={criarSemana} style={{ ...btnEstilo('#e8f5e9', '#005a27'), textAlign: 'left' }}>🗓️ Nova Semana</button>
+              <label style={{ ...btnEstilo('#fff3e0', '#8a4b00'), textAlign: 'left', cursor: 'pointer', display: 'block', border: '1.5px dashed #ffb74d' }}>
+                📥 Importar JSON (sessão antiga)
+                <input type="file" accept=".json" onChange={importarJSON} style={{ display: 'none' }} />
+              </label>
               <button onClick={exportarExcel} style={{ ...btnEstilo('#e8f5e9', '#005a27'), textAlign: 'left' }}>📊 Exportar Excel</button>
               <div style={{ fontSize: 11, color: '#999', marginTop: 10, padding: '10px 4px 0', borderTop: '1px solid #ddd' }}>
                 Relatório, Histórico, Importar Itens e Situação de TAGs chegam na próxima atualização.
