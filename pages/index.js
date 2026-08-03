@@ -33,13 +33,13 @@ export default function Home() {
             </div>
           </Link>
 
-          <div style={{ ...cardEstilo(false) }}>
-            <div style={{ fontSize: 36, marginBottom: 14, opacity: 0.5 }}>📄</div>
-            <div style={{ fontSize: 18, fontWeight: 'bold', color: '#999', marginBottom: 6 }}>Controle de Drafts</div>
-            <div style={{ fontSize: 13, color: '#aaa', lineHeight: 1.55 }}>
+          <div style={{ ...cardEstilo(true), borderTop: '4px solid #0B5FA8' }} onClick={() => window.location.href = '/drafts'}>
+            <div style={{ fontSize: 36, marginBottom: 14 }}>📄</div>
+            <div style={{ fontSize: 18, fontWeight: 'bold', color: '#0B5FA8', marginBottom: 6 }}>Controle de Drafts</div>
+            <div style={{ fontSize: 13, color: '#777', lineHeight: 1.55 }}>
               Revisões de documentos PDF/Excel, comentários e histórico de avaliação.
             </div>
-            <div style={{ marginTop: 16, fontSize: 13, fontWeight: 'bold', color: '#bbb' }}>Em construção</div>
+            <div style={{ marginTop: 16, fontSize: 13, fontWeight: 'bold', color: '#0B5FA8' }}>Entrar →</div>
           </div>
         </div>
 

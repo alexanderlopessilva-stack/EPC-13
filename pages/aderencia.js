@@ -5,6 +5,7 @@ import ItemModal from '../components/ItemModal';
 import PTDrawer from '../components/PTDrawer';
 import RelatorioHistorico from '../components/RelatorioHistorico';
 import AtualizacaoDiffModal from '../components/AtualizacaoDiffModal';
+import BatchFillModal from '../components/BatchFillModal';
 
 const DIAS = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom'];
 const STATUS_CICLO = ['', 'ok', 'pend', 'nok', 'fin', 'semprog'];
@@ -31,6 +32,9 @@ export default function Aderencia() {
   const [itemAberto, setItemAberto] = useState(null);
   const [avisoBusca, setAvisoBusca] = useState(null); // null | 'nenhuma' | ['31','35',...]
   const [diffAtualizacao, setDiffAtualizacao] = useState(null);
+  const [selMode, setSelMode] = useState(false);
+  const [selecionados, setSelecionados] = useState({});
+  const [batchAberto, setBatchAberto] = useState(false);
   const [novoItem, setNovoItem] = useState({ item: '', assunto: '', draft: '', disciplina: '', responsavel: '', fora_programacao: false });
   const [ptAberto, setPtAberto] = useState(false);
   const [relatorioAberto, setRelatorioAberto] = useState(false);
@@ -98,14 +102,49 @@ export default function Aderencia() {
     carregarItens(semanaAtivaId);
   }
 
-  async function alternarDiaRapido(itemAtual, dia) {
-    const diasAtual = itemAtual.aderencia_dias || {};
-    const statusAtual = (diasAtual[dia] && diasAtual[dia].status) || '';
-    const proximoIdx = (STATUS_CICLO.indexOf(statusAtual) + 1) % STATUS_CICLO.length;
-    const novosDias = { ...diasAtual, [dia]: { status: STATUS_CICLO[proximoIdx] } };
-    setItens(prev => prev.map(it => it.id === itemAtual.id ? { ...it, aderencia_dias: novosDias } : it));
-    const { error } = await supabase.from('itens').update({ aderencia_dias: novosDias, atualizado_em: new Date().toISOString() }).eq('id', itemAtual.id);
-    if (error) { alert('Erro ao salvar: ' + error.message); carregarItens(semanaAtivaId); }
+  function toggleSelMode() {
+    setSelMode(prev => !prev);
+    setSelecionados({});
+  }
+  function toggleSelecionarItem(id) {
+    setSelecionados(prev => ({ ...prev, [id]: !prev[id] }));
+  }
+  function selecionarTodos() {
+    const todosMarcados = itensFiltrados.every(it => selecionados[it.id]);
+    const novo = {};
+    itensFiltrados.forEach(it => { novo[it.id] = !todosMarcados; });
+    setSelecionados(novo);
+  }
+  const qtdSelecionados = Object.values(selecionados).filter(Boolean).length;
+
+  function abrirBatchFill() {
+    if (qtdSelecionados === 0) { alert('Selecione pelo menos um item primeiro!'); return; }
+    setBatchAberto(true);
+  }
+  async function confirmarBatchFill(dias, status, obs) {
+    const idsAlvo = Object.keys(selecionados).filter(id => selecionados[id]);
+    const itensAlvo = itens.filter(it => idsAlvo.includes(it.id));
+
+    const temPreenchidos = itensAlvo.some(it => {
+      const diasAtual = it.aderencia_dias || {};
+      return dias.some(d => diasAtual[d] && diasAtual[d].status);
+    });
+    if (temPreenchidos && !confirm('Um ou mais itens já possuem status nos dias selecionados.\nDeseja sobrescrever?')) return;
+
+    for (const it of itensAlvo) {
+      const diasAtual = it.aderencia_dias || {};
+      const novo = { ...diasAtual };
+      dias.forEach(d => {
+        novo[d] = { ...(diasAtual[d] || {}), status };
+        if (obs) novo[d].obs = obs;
+      });
+      await supabase.from('itens').update({ aderencia_dias: novo, atualizado_em: new Date().toISOString() }).eq('id', it.id);
+    }
+    setBatchAberto(false);
+    setSelMode(false);
+    setSelecionados({});
+    carregarItens(semanaAtivaId);
+    alert('✅ ' + itensAlvo.length + ' item(ns) atualizado(s)!');
   }
 
   async function salvarItem(dadosAtualizados) {
@@ -653,10 +692,29 @@ export default function Aderencia() {
         {carregando && <div style={{ textAlign: 'center', color: '#888', padding: 30 }}>Carregando...</div>}
         {!carregando && itensFiltrados.length === 0 && <div style={{ textAlign: 'center', color: '#888', padding: 30 }}>Nenhum item encontrado.</div>}
 
+        {selMode && (
+          <div style={{ position: 'sticky', top: 0, zIndex: 60, background: '#1b5e20', color: '#fff', borderRadius: 10, padding: '10px 16px', marginBottom: 14, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 13, fontWeight: 'bold' }}>{qtdSelecionados} item{qtdSelecionados !== 1 ? 's' : ''} selecionado{qtdSelecionados !== 1 ? 's' : ''}</span>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button onClick={selecionarTodos} style={{ background: 'rgba(255,255,255,.18)', color: '#fff', border: '1px solid rgba(255,255,255,.4)', borderRadius: 6, padding: '6px 12px', fontSize: 12, fontWeight: 'bold', cursor: 'pointer' }}>
+                ☑ Marcar/Desmarcar todos
+              </button>
+              <button onClick={abrirBatchFill} style={{ background: '#ffd54f', color: '#1b3d1b', border: 'none', borderRadius: 6, padding: '6px 12px', fontSize: 12, fontWeight: 'bold', cursor: 'pointer' }}>
+                📦 Preencher em lote
+              </button>
+            </div>
+          </div>
+        )}
+
         {itensFiltrados.map(it => (
           <div key={it.id} style={{ background: '#fff', borderRadius: 12, padding: 16, marginBottom: 14, boxShadow: '0 1px 8px rgba(0,0,0,.08)', cursor: 'pointer',
-            border: it.fora_programacao ? '2px solid #e65100' : 'none' }}
-            onClick={() => setItemAberto(it)}>
+            border: selecionados[it.id] ? '2px solid #007a33' : (it.fora_programacao ? '2px solid #e65100' : 'none'), textAlign: 'center', position: 'relative' }}
+            onClick={() => selMode ? toggleSelecionarItem(it.id) : setItemAberto(it)}>
+            {selMode && (
+              <input type="checkbox" checked={!!selecionados[it.id]} onChange={() => toggleSelecionarItem(it.id)}
+                onClick={e => e.stopPropagation()}
+                style={{ position: 'absolute', top: 12, left: 12, width: 18, height: 18, cursor: 'pointer' }} />
+            )}
             {it.fora_programacao && (
               <div style={{ textAlign: 'center', fontSize: 11, fontWeight: 'bold', color: '#e65100', background: '#fff3e0', borderRadius: 8, padding: '2px 8px', marginBottom: 8, display: 'inline-block' }}>
                 ⚡ Fora da programação
@@ -669,15 +727,15 @@ export default function Aderencia() {
             <div style={{ fontSize: 13, color: '#555' }}>{it.assunto}</div>
             <div style={{ fontSize: 12, color: '#888', marginBottom: 8 }}>{it.disciplina} {it.responsavel ? '· ' + it.responsavel : ''}</div>
 
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }} onClick={e => e.stopPropagation()}>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'center', marginTop: 4 }}>
               {DIAS.map(d => {
                 const st = (it.aderencia_dias && it.aderencia_dias[d] && it.aderencia_dias[d].status) || '';
                 const info = STATUS_INFO[st];
                 return (
-                  <button key={d} onClick={() => alternarDiaRapido(it, d)} title={d}
-                    style={{ background: info.cor, color: info.texto, border: 'none', borderRadius: 6, padding: '5px 9px', fontSize: 11, fontWeight: 'bold', cursor: 'pointer', minWidth: 38 }}>
+                  <span key={d} title={d}
+                    style={{ background: info.cor, color: info.texto, borderRadius: 6, padding: '5px 9px', fontSize: 11, fontWeight: 'bold', minWidth: 38, textAlign: 'center', userSelect: 'none' }}>
                     {d}<br />{info.label}
-                  </button>
+                  </span>
                 );
               })}
             </div>
@@ -697,6 +755,9 @@ export default function Aderencia() {
             <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 8 }}>
               <button onClick={criarSemana} style={{ ...btnEstilo('#e8f5e9', '#005a27'), textAlign: 'left' }}>🗓️ Nova Semana</button>
               <button onClick={excluirSemana} style={{ ...btnEstilo('#fdecea', '#c0392b'), textAlign: 'left' }}>🗑 Excluir Semana Atual</button>
+              <button onClick={() => { toggleSelMode(); setMenuAberto(false); }} style={{ ...btnEstilo(selMode ? '#c0392b' : '#e8f5e9', selMode ? '#fff' : '#005a27'), textAlign: 'left' }}>
+                {selMode ? '✕ Sair da seleção' : '☑ Selecionar Itens'}
+              </button>
               <label style={{ ...btnEstilo('#fff3e0', '#8a4b00'), textAlign: 'left', cursor: 'pointer', display: 'block', border: '1.5px dashed #ffb74d' }}>
                 🗂️ Adicionar Semana Anterior
                 <input type="file" accept=".xlsx,.xls,.csv" onChange={adicionarSemanaAnterior} style={{ display: 'none' }} />
@@ -744,6 +805,8 @@ export default function Aderencia() {
         semanas={semanas} itensSemanaAtual={itens} semanaAtivaNumero={semanaAtiva ? semanaAtiva.numero : ''} />
 
       <AtualizacaoDiffModal diff={diffAtualizacao} onCancelar={() => setDiffAtualizacao(null)} onAplicar={aplicarDiffAtualizacao} />
+
+      <BatchFillModal aberto={batchAberto} qtdSelecionados={qtdSelecionados} onCancelar={() => setBatchAberto(false)} onConfirmar={confirmarBatchFill} />
     </div>
   );
 }
